@@ -15,14 +15,14 @@
 
 namespace
 {
-constexpr int    REFRESH_INTERVAL_MS = 66;   // ~15 Hz
-constexpr double BEHIND_WARN_S       = 0.2;  // show the warning once channels lag exec by this (matches console)
-}
+constexpr int    REFRESH_INTERVAL_MS = 66;  // ~15 Hz
+constexpr double BEHIND_WARN_S       = 0.2; // show the warning once channels lag exec by this (matches console)
+} // namespace
 
 Main_window::Main_window( const Receiver& receiver, Receiver_controller& controller, QWidget* parent )
-    : QMainWindow( parent )
-    , view_( receiver )
-    , controller_( controller )
+    : QMainWindow( parent ),
+      view_( receiver ),
+      controller_( controller )
 {
     setWindowTitle( QStringLiteral( "GNSS SDR" ) );
     resize( 960, 600 );
@@ -43,8 +43,7 @@ Main_window::Main_window( const Receiver& receiver, Receiver_controller& control
     tabs_ = new QTabWidget( this );
     setCentralWidget( tabs_ );
 
-    // Register panels - one line each, in tab order. Replace the placeholders with their real
-    // panels (Satellite_list_widget, Sky_plot_widget) as they are built.
+    // Register panels - one line each, in tab order.
     add_panel( new Pvt_widget );
     add_panel( new Satellite_list_widget( receiver ) );
     add_panel( new Sky_plot_widget );
@@ -88,9 +87,9 @@ void Main_window::refresh()
     }
 
     const Receiver_status& s = frame.status;
-    status_label_->setText( QString::asprintf(
-        "exec (s): %.1f   |   stream (s): %.1f   |   channel (s): %.1f", s.exec_s, s.stream_s, s.channel_s
-    ) );
+    status_label_->setText(
+        QString::asprintf( "exec (s): %.1f   |   stream (s): %.1f   |   channel (s): %.1f", s.exec_s, s.stream_s, s.channel_s )
+    );
 
     const double behind = s.exec_s - s.channel_s;
     if( behind > BEHIND_WARN_S )

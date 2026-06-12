@@ -1,8 +1,8 @@
 #include "iq_heatmap_widget.h"
-#include <algorithm>
-#include <cmath>
 #include <QImage>
 #include <QPainter>
+#include <algorithm>
+#include <cmath>
 #include "plasma.h"
 
 Iq_heatmap_widget::Iq_heatmap_widget( QWidget* parent )
@@ -36,8 +36,7 @@ void Iq_heatmap_widget::paintEvent( QPaintEvent* )
         const double lmax = std::log( 1.0 + max_heat );
 
         // Build the grid as an image (log-scaled heat -> plasma), then smooth-scale it to fill the box.
-        // Low-heat cells fade toward BLACK (the lowest ~12% of intensity) so empty space reads black like
-        // the Python plot, rather than plasma's dark-purple floor.
+        // Low-heat cells fade toward black (the lowest ~12% of intensity) so empty space reads black.
         QImage img( N, N, QImage::Format_RGB32 );
         for( int q = 0; q < N; ++q )
         {

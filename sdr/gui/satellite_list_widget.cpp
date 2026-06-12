@@ -1,10 +1,10 @@
 #include "satellite_list_widget.h"
-#include <set>
 #include <QFont>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QScrollArea>
 #include <QVBoxLayout>
+#include <set>
 #include "cn0_bar_widget.h"
 #include "gnss_format.h"
 #include "gui_frame.h"
@@ -12,21 +12,21 @@
 #include "satellite_widget.h"
 
 Satellite_list_widget::Satellite_list_widget( const Receiver& receiver, QWidget* parent )
-    : Gui_panel( parent )
-    , receiver_( receiver )
+    : Gui_panel( parent ),
+      receiver_( receiver )
 {
     auto* outer = new QVBoxLayout( this );
 
     summary_ = new QLabel( this );
     outer->addWidget( summary_ );
 
-    // Body is split: the text list on the LEFT half, the C/N0 bar chart on the RIGHT half.
+    // Body is split: the text list on the left half, the C/N0 bar chart on the right half.
     auto* body = new QHBoxLayout;
     outer->addLayout( body, 1 );
 
     // Left column: header + scrollable rows.
-    auto* left        = new QVBoxLayout;
-    auto* header      = new QLabel( Satellite_widget::header_text(), this );
+    auto* left   = new QVBoxLayout;
+    auto* header = new QLabel( Satellite_widget::header_text(), this );
     header->setFont( QFont( QStringLiteral( "monospace" ) ) );
     header->setContentsMargins( 6, 0, 6, 0 );
     left->addWidget( header );
@@ -59,8 +59,8 @@ int Satellite_list_widget::key_of( Constellation constellation, int prn )
 
 void Satellite_list_widget::update_frame( const Gui_frame& frame )
 {
-    std::set<int>                    tracking_keys;
-    int                              tracking_count = 0;
+    std::set<int>                      tracking_keys;
+    int                                tracking_count = 0;
     std::map<int, Cn0_bar_widget::Bar> bars; // keyed -> SV-sorted left-to-right
 
     for( const Channel_snapshot& s : frame.channels )
@@ -126,9 +126,7 @@ void Satellite_list_widget::update_frame( const Gui_frame& frame )
         current_order_ = std::move( desired );
     }
 
-    summary_->setText(
-        QString::asprintf( "Tracking %d of %zu satellites", tracking_count, rows_.size() )
-    );
+    summary_->setText( QString::asprintf( "Tracking %d of %zu satellites", tracking_count, rows_.size() ) );
 
     std::vector<Cn0_bar_widget::Bar> bar_list;
     bar_list.reserve( bars.size() );
@@ -152,10 +150,13 @@ void Satellite_list_widget::open_detail( Constellation constellation, int prn )
 
     // Parent to this widget's top-level window (so it is cleaned up on exit) but flagged as its own
     // window. It refreshes from update_frame and removes itself from the map when closed.
-    auto* win        = new Satellite_detail_window( constellation, prn, receiver_, window() );
+    auto* win            = new Satellite_detail_window( constellation, prn, receiver_, window() );
     detail_windows_[key] = win;
-    connect( win, &Satellite_detail_window::closed, this, [this]( Constellation c, int p ) {
-        detail_windows_.erase( key_of( c, p ) );
-    } );
+    connect(
+        win,
+        &Satellite_detail_window::closed,
+        this,
+        [this]( Constellation c, int p ) { detail_windows_.erase( key_of( c, p ) ); }
+    );
     win->show();
 }
