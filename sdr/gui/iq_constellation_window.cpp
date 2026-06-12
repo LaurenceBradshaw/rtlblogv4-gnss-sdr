@@ -1,0 +1,31 @@
+#include "iq_constellation_window.h"
+#include <QVBoxLayout>
+#include "gnss_format.h"
+#include "iq_heatmap_widget.h"
+
+Iq_constellation_window::Iq_constellation_window(
+    Constellation constellation, int prn, const Receiver& receiver, QWidget* parent
+)
+    : Graph_window(
+          constellation,
+          prn,
+          receiver,
+          QString::asprintf( "%s%02d  I/Q constellation", gui_format::constellation_prefix( constellation ), prn ),
+          parent
+      )
+{
+    resize( 360, 400 );
+    auto* layout = new QVBoxLayout( this );
+    heatmap_     = new Iq_heatmap_widget( this );
+    layout->addWidget( heatmap_ );
+
+    start_polling();
+}
+
+void Iq_constellation_window::refresh()
+{
+    if( auto h = history() )
+    {
+        heatmap_->set_snapshot( h->iq );
+    }
+}

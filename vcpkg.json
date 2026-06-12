@@ -1,0 +1,11 @@
+{
+  "name": "gnss-sdr",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "cxxopts",
+    "eigen3",
+    "catch2",
+    "fmt",
+    "fftw3"
+  ]
+}

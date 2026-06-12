@@ -1,0 +1,28 @@
+{
+    "cmake.generator": "Ninja",
+    "cmake.configureArgs": [
+        "-DCMAKE_TOOLCHAIN_FILE=${env:HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "-DENABLE_UNIT_TESTS=ON"
+    ],
+    "cmake.environment": {
+        "CC": "/usr/bin/clang-18",
+        "CXX": "/usr/bin/clang++-18"
+    },
+    "cmake.buildType": "Debug",
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.exportCompileCommandsFile": true,
+    "cmake.configureOnOpen": true,
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "[cpp]": {
+        "editor.defaultFormatter": "ms-vscode.cpptools"
+    },
+    "[c]": {
+        "editor.defaultFormatter": "ms-vscode.cpptools"
+    },
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "chat.tools.terminal.autoApprove": {
+        "./bin/sdr": true
+    },
+}

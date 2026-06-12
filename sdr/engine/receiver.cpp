@@ -1,0 +1,434 @@
+#include "receiver.h"
+#include <chrono>
+#include <fmt/format.h>
+#include <thread>
+#include "logging.h"
+#include "rtlsdr_device.h"
+#include "sample_buffer.h"
+#include "scheduler.h"
+#include "signal.h"
+#include "thread_pool.h"
+#include "types.h"
+
+namespace
+{
+// Round n up to the next power of two.
+size_t next_power_of_two( size_t n )
+{
+    size_t p = 1;
+    while( p < n )
+    {
+        p <<= 1;
+    }
+    return p;
+}
+
+constexpr uint32_t GNSS_L1_HZ = 1575420000U; // GPS L1 C/A + Galileo E1 band centre
+
+// The signals to search, one make_signal() per (constellation, band, code). Single source of truth
+// for both setup() (which owns them) and the configured-satellite enumeration. Combined GPS + Galileo:
+// GPS anchors the fix + receiver clock; Galileo adds SVs via the EKF inter-system-bias state.
+// TODO: make this come from Receiver_config once the GUI signal-selection tab lands.
+std::vector<std::unique_ptr<Signal>> make_configured_signals()
+{
+    std::vector<std::unique_ptr<Signal>> signals;
+    signals.push_back( make_signal( Constellation::Gps, Band::L1, Code::CA ) );
+    signals.push_back( make_signal( Constellation::Galileo, Band::E1, Code::B ) );
+    return signals;
+}
+} // namespace
+
+Receiver::Receiver( Receiver_config config )
+    : config_( std::move( config ) )
+{
+    // Enumerate the configured satellites once, so the GUI can list them all before Start.
+    for( const auto& sig : make_configured_signals() )
+    {
+        const auto [sv_lo, sv_hi] = sig->sv_range();
+        for( int sv = sv_lo; sv <= sv_hi; ++sv )
+        {
+            configured_sats_.push_back( { sig->params().constellation, sv } );
+        }
+    }
+}
+
+Receiver::~Receiver() = default;
+
+void Receiver::setup()
+{
+    // Start from a clean slate so a restart (GUI Start after Stop) runs afresh: drop anything a
+    // previous run left, and reset the stateful pieces that teardown() does not own (the EKF, the
+    // observation clock anchor, the acquisition aiding). An IQ file replays from the start because a
+    // brand-new Iq_file_device is created below.
+    signals_.clear();
+    channels_.clear();
+    channel_ptrs_.clear();
+    aiding_.reset();
+    obs_engine_ = Observation_engine {};
+    pos_solver_ = Position_solver {};
+    clear_published_state(); // a fresh run starts from a clean GUI state (drops any frozen EOF state)
+
+    const uint32_t sample_rate_hz = config_.sample_rate_hz;
+
+    // Buffer must hold at least 2 s of samples so that push()'s 1 s sleep
+    // (see sample_buffer.cpp) always wakes up to find meaningful space freed.
+    const size_t buffer_capacity = next_power_of_two( 2 * static_cast<size_t>( sample_rate_hz ) );
+    sample_buffer_ = std::make_unique<Sample_buffer>( buffer_capacity, static_cast<double>( sample_rate_hz ) );
+
+    // Source: live RTL-SDR or recorded file, behind the Stream_device interface.
+    std::string source_desc;
+    if( config_.use_rtlsdr )
+    {
+        auto rtl = std::make_unique<Rtlsdr_device>( config_.device_index );
+        rtl->set_sample_rate_hz( sample_rate_hz );
+        rtl->set_centre_freq_hz( GNSS_L1_HZ );
+        if( config_.gain_db >= 0.0 )
+        {
+            rtl->set_gain_tenths_db( static_cast<int>( config_.gain_db * 10.0 ) );
+        }
+        else
+        {
+            rtl->set_agc( true );
+        }
+        source_desc = fmt::format( "RTL-SDR device {} (centre {} Hz)", config_.device_index, GNSS_L1_HZ );
+        device_     = std::move( rtl );
+    }
+    else
+    {
+        device_     = std::make_unique<Iq_file_device>( config_.file_path, sample_rate_hz, config_.format );
+        source_desc = config_.file_path;
+    }
+
+    // Signals to search for. The objects must outlive the channels (channels hold a const reference).
+    signals_ = make_configured_signals();
+
+    // Passive channels (no per-channel thread): one per (signal, SV). A Thread_pool of
+    // N workers does the correlation work; the Scheduler hands ready channels to it.
+    for( const auto& sig : signals_ )
+    {
+        const auto [sv_lo, sv_hi] = sig->sv_range();
+        for( int sv = sv_lo; sv <= sv_hi; sv++ )
+        {
+            channels_.push_back( std::make_unique<Channel>(
+                *sig, static_cast<Satellite_id>( sv ), sample_rate_hz, *sample_buffer_, aiding_
+            ) );
+        }
+    }
+
+    logging::log(
+        logging::Level::Info,
+        fmt::format( "Streaming {} at {} Hz - launching {} channels", source_desc, sample_rate_hz, channels_.size() )
+    );
+
+    const unsigned num_workers = std::max( 1u, std::thread::hardware_concurrency() );
+    pool_                      = std::make_unique<Thread_pool>( num_workers );
+
+    channel_ptrs_.reserve( channels_.size() );
+    for( auto& ch : channels_ )
+    {
+        channel_ptrs_.push_back( ch.get() );
+    }
+
+    scheduler_ = std::make_unique<Scheduler>( channel_ptrs_, *pool_, *sample_buffer_ );
+
+    logging::log( logging::Level::Info, fmt::format( "Thread pool: {} workers", num_workers ) );
+}
+
+void Receiver::teardown()
+{
+    // Teardown order matters: stop producing, stop dispatching (no new tasks),
+    // drain the pool (in-flight tasks still reference channels), then channels.
+    if( device_ )
+    {
+        device_->stop_streaming();
+    }
+    scheduler_.reset();
+    pool_.reset();
+    channels_.clear();
+    channel_ptrs_.clear();
+}
+
+void Receiver::run()
+{
+    // running_ set BEFORE setup() so a stop() during setup is not lost (setup can't be interrupted
+    // mid-way, but we bail before streaming if a stop arrived).
+    running_ = true;
+    setup();
+    if( !running_ )
+    {
+        teardown();
+        return;
+    }
+
+    const double sample_rate_hz = static_cast<double>( config_.sample_rate_hz );
+
+    constexpr auto TICK_INTERVAL = std::chrono::milliseconds( 100 );
+    constexpr int  LOG_EVERY_N   = 10;
+
+    // Capture wall_start BEFORE start_streaming() so it is always <=
+    // sample_buffer's internal stream_start_ (set on first push).
+    // This guarantees: elapsed_samples <= wall_s * sample_rate_hz at every
+    // point, so channel_s (derived from elapsed_samples) never exceeds wall_s.
+    const auto wall_start = std::chrono::steady_clock::now();
+
+    device_->start_streaming( [this]( const Complex_buf& samples ) { sample_buffer_->push( samples ); } );
+
+    std::optional<Position_solution> current_position = std::nullopt;
+    int                              tick             = 0;
+    while( running_ )
+    {
+        std::this_thread::sleep_for( TICK_INTERVAL );
+
+        // Feed the previous fix in so iono/tropo corrections can use it (off until one exists).
+        const Ecef user_ecef =
+            current_position ? Ecef { current_position->ecef_x_m, current_position->ecef_y_m, current_position->ecef_z_m }
+                             : Ecef {};
+        obs_engine_.generate(
+            channel_ptrs_, scheduler_->min_next_sample(), sample_rate_hz, current_position ? &user_ecef : nullptr
+        );
+        current_position = pos_solver_.compute_solution( obs_engine_.get_measurements(), obs_engine_.reception_time_s() );
+
+        // Loop timing/progress (computed every tick so the GUI status bar stays responsive).
+        // exec: wall-clock since streaming started. stream: seconds of IQ pushed into the ring
+        // buffer (can exceed exec - disk I/O outruns real-time). channel: the slowest channel's
+        // processed position (what is actually correlated).
+        const Receiver_status status {
+            std::chrono::duration<double>( std::chrono::steady_clock::now() - wall_start ).count(),
+            static_cast<double>( device_->samples_consumed() ) / sample_rate_hz,
+            static_cast<double>( scheduler_->min_next_sample() ) / sample_rate_hz,
+        };
+
+        // Publish a coherent copy of the GUI-visible state (PVT + per-channel snapshots + status) under
+        // the lock. Snapshotting here, on the run thread that owns the channels, keeps GUI readers off
+        // the live channels entirely.
+        {
+            std::vector<Channel_snapshot> snaps;
+            snaps.reserve( channel_ptrs_.size() );
+            for( Channel* ch : channel_ptrs_ )
+            {
+                snaps.push_back( ch->snapshot() );
+            }
+            std::lock_guard<std::mutex> lock( state_mutex_ );
+            latest_position_  = current_position;
+            latest_snapshots_ = std::move( snaps );
+            latest_status_    = status;
+        }
+
+        publish_histories();
+
+        // No clock steering here: the EKF carries the receiver clock bias + drift as states
+        // and tracks them itself, so the master time anchor stays at its coarse value and we
+        // do not feed the solved bias back (that would fight the filter's clock model).
+
+        // Feed the solved clock DRIFT back into acquisition aiding as a rigorous common-mode
+        // recenter. The drift is a range-rate (m/s); the equivalent fractional carrier offset
+        // (df/f) the aiding wants is cd/c. Refreshed each fix so the recenter tracks the
+        // (slowly varying) LO drift; takes precedence over the pre-PVT satellite-mean bridge.
+        if( current_position && current_position->valid )
+        {
+            aiding_.set_clock_fraction( current_position->clock_drift_m_s / 299792458.0 );
+        }
+
+        if( ++tick % LOG_EVERY_N == 0 )
+        {
+            if( current_position && current_position->valid )
+            {
+                // Reference constellation always; an ISB only for non-reference constellations present.
+                std::string ref_isb = fmt::format( "  ref={}", constellation_name( current_position->reference ) );
+                for( int c = 0; c < NUM_CONSTELLATIONS; ++c )
+                {
+                    if( current_position->isb_present[c] )
+                    {
+                        ref_isb += fmt::format(
+                            "  isb[{}]={:.1f} m", constellation_name( static_cast<Constellation>( c ) ), current_position->isb_m[c]
+                        );
+                    }
+                }
+                logging::log(
+                    logging::Level::Info,
+                    fmt::format(
+                        "Position - ECEF x={:.1f} m  y={:.1f} m  z={:.1f} m  clock bias={:.6f} m{}",
+                        current_position->ecef_x_m,
+                        current_position->ecef_y_m,
+                        current_position->ecef_z_m,
+                        current_position->clock_bias_m,
+                        ref_isb
+                    )
+                );
+                logging::log(
+                    logging::Level::Info,
+                    fmt::format(
+                        "Velocity - ECEF x={:.1f} m/s  y={:.1f} m/s  z={:.1f} m/s  clock drift={:.6f} m/s",
+                        current_position->ecef_x_m_s,
+                        current_position->ecef_y_m_s,
+                        current_position->ecef_z_m_s,
+                        current_position->clock_drift_m_s
+                    )
+                );
+            }
+
+            logging::log(
+                logging::Level::Info,
+                fmt::format(
+                    "exec={:.1f}s  streamed={:.1f}s  channels={:.1f}s", status.exec_s, status.stream_s, status.channel_s
+                )
+            );
+
+            if( status.channel_s < status.exec_s - 0.2 )
+            {
+                logging::log(
+                    logging::Level::Warning,
+                    fmt::format( "Channels are {:.1f}s behind real time", status.exec_s - status.channel_s )
+                );
+            }
+        }
+
+        // Exit once the file is fully streamed AND every channel has consumed as far as
+        // its own block size allows (acq_block differs per signal - GPS 1 ms vs Galileo
+        // 4 ms - so each channel reports drained against its own limit).
+        if( !device_->is_streaming() )
+        {
+            const Sample_index eof      = sample_buffer_->write_index();
+            bool               all_done = true;
+            for( const auto& ch : channels_ )
+            {
+                if( !ch->is_drained( eof ) )
+                {
+                    all_done = false;
+                    break;
+                }
+            }
+            if( all_done )
+            {
+                break;
+            }
+        }
+    }
+
+    // Distinguish a natural END OF FILE (loop broke while still running) from a user STOP (stop() cleared
+    // running_). On EOF we FREEZE: keep the last published snapshots and capture every channel's graph
+    // history before teardown destroys the channels, so panels/graphs opened afterwards show the last
+    // state. On Stop we RESET the published state.
+    const bool eof = running_.load( std::memory_order_relaxed );
+    if( eof )
+    {
+        freeze_histories();
+    }
+    running_ = false;
+    teardown();
+    if( !eof )
+    {
+        clear_published_state();
+    }
+    logging::log( logging::Level::Info, eof ? "Reached end of file." : "Stopped." );
+}
+
+void Receiver::freeze_histories()
+{
+    // Snapshot every channel that has graph data (was tracking), keyed by SV, into the published map -
+    // overriding the subscription filter so any SV's graph opened after EOF finds its last history. Runs
+    // on the run thread before teardown (channels still alive).
+    std::map<int, Tracking_history::Snapshot> frozen;
+    for( Channel* ch : channel_ptrs_ )
+    {
+        Tracking_history::Snapshot snap = ch->history_snapshot();
+        if( snap.iq.has_data || !snap.doppler.fast.hz.empty() )
+        {
+            frozen[history_key( ch->signal().params().constellation, static_cast<int>( ch->satellite_id() ) )] =
+                std::move( snap );
+        }
+    }
+    std::lock_guard<std::mutex> lock( state_mutex_ );
+    published_histories_ = std::move( frozen );
+}
+
+void Receiver::clear_published_state()
+{
+    std::lock_guard<std::mutex> lock( state_mutex_ );
+    latest_position_ = std::nullopt;
+    latest_snapshots_.clear();
+    latest_status_ = {};
+    published_histories_.clear();
+    // history_subscriptions_ is left intact: graph windows that are still open want data again on a restart.
+}
+
+void Receiver::stop()
+{
+    running_ = false;
+}
+
+std::optional<Position_solution> Receiver::latest_position() const
+{
+    std::lock_guard<std::mutex> lock( state_mutex_ );
+    return latest_position_;
+}
+
+std::vector<Channel_snapshot> Receiver::channel_snapshots() const
+{
+    std::lock_guard<std::mutex> lock( state_mutex_ );
+    return latest_snapshots_;
+}
+
+Receiver_status Receiver::status() const
+{
+    std::lock_guard<std::mutex> lock( state_mutex_ );
+    return latest_status_;
+}
+
+void Receiver::subscribe_history( Constellation constellation, int prn, bool on ) const
+{
+    const int                   key = history_key( constellation, prn );
+    std::lock_guard<std::mutex> lock( state_mutex_ );
+    if( on )
+    {
+        ++history_subscriptions_[key];
+    }
+    else if( auto it = history_subscriptions_.find( key ); it != history_subscriptions_.end() && --it->second <= 0 )
+    {
+        // last watcher for this SV closed -> drop the subscription + its published copy
+        history_subscriptions_.erase( it );
+        published_histories_.erase( key );
+    }
+}
+
+std::optional<Tracking_history::Snapshot> Receiver::published_history( Constellation constellation, int prn ) const
+{
+    std::lock_guard<std::mutex> lock( state_mutex_ );
+    if( auto it = published_histories_.find( history_key( constellation, prn ) ); it != published_histories_.end() )
+    {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+void Receiver::publish_histories()
+{
+    // Snapshot the subscription set, copy each subscribed channel's history WITHOUT holding state_mutex_
+    // (only the per-channel history mutexes), then swap the published map in under the lock. Runs on the
+    // run thread, which owns the channels - the GUI only ever reads the published copies.
+    std::set<int> subs;
+    {
+        std::lock_guard<std::mutex> lock( state_mutex_ );
+        for( const auto& [key, count] : history_subscriptions_ )
+        {
+            subs.insert( key );
+        }
+    }
+    if( subs.empty() )
+    {
+        return;
+    }
+
+    std::map<int, Tracking_history::Snapshot> fresh;
+    for( Channel* ch : channel_ptrs_ )
+    {
+        const int key = history_key( ch->signal().params().constellation, static_cast<int>( ch->satellite_id() ) );
+        if( subs.count( key ) )
+        {
+            fresh[key] = ch->history_snapshot();
+        }
+    }
+
+    std::lock_guard<std::mutex> lock( state_mutex_ );
+    published_histories_ = std::move( fresh );
+}

@@ -1,0 +1,50 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch sdr",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/sdr",
+            "args": [
+                // "--format",
+                // "int16",
+                // "--sample-rate",
+                // "2048000",
+                // "--file",
+                // "gps_london.bin"
+                "--format",
+                "int16",
+                "--sample-rate",
+                "4000000",
+                "--file",
+                "../2013_04_04_GNSS_SIGNAL_at_CTTC_SPAIN/2013_04_04_GNSS_SIGNAL_at_CTTC_SPAIN.dat",
+                "--gui"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                // WSLg: force Qt onto X11/Xwayland. Without this, WAYLAND_DISPLAY makes Qt try the
+                // (uninstalled) wayland plugin first, and the fallback leaves WSLg's taskbar/RAIL
+                // integration confused - window shows on the taskbar but is unfocusable with a generic icon.
+                { "name": "QT_QPA_PLATFORM", "value": "xcb" }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb"
+        },
+        {
+            "name": "Launch test_sdr",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/test_sdr",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb"
+        }
+    ]
+}
