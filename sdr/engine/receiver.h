@@ -92,6 +92,17 @@ public:
         return configured_sats_;
     }
 
+    // The signals + PRNs the next run will search. The GUI selection tab reads this to initialise and
+    // writes it back via set_signal_selection() before a (re)Start; takes effect on the next setup().
+    const std::vector<Signal_selection>& signal_selection() const
+    {
+        return signal_selection_;
+    }
+    // Replace the signal selection (set exactly; empty = search nothing) and re-enumerate
+    // configured_satellites(). Only meaningful while stopped (the next run() rebuilds channels from it,
+    // and the GUI reads configured_satellites() for its live pre-Start list); ignored while running.
+    void set_signal_selection( std::vector<Signal_selection> selection );
+
     // ---- Per-SV graph history (subscription model) ----
     // The GUI subscribes the SVs whose graph windows are open; the run loop publishes only those each
     // tick. So the GUI never touches a live channel - it reads published copies, like the snapshots. One
@@ -103,6 +114,7 @@ public:
 private:
     void setup();               // construct device/buffer/signals/channels/pool/scheduler
     void teardown();            // tear them down in dependency order
+    void enumerate_configured_sats(); // fill configured_sats_ from signal_selection_ (+ PRN filters)
     void publish_histories();   // run-loop helper: copy subscribed channels' history to the published map
     void freeze_histories();    // at EOF: snapshot ALL data-having channels so graphs keep their last state
     void clear_published_state(); // reset the GUI-visible published state (on Stop / fresh Start)

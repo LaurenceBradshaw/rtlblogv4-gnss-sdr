@@ -40,8 +40,14 @@ Receiver::Receiver( Receiver_config config )
     // constructor's satellite enumeration and setup()'s channel creation always agree.
     signal_selection_ = config_.selected_signals.empty() ? default_signal_selection() : config_.selected_signals;
 
-    // Enumerate the configured satellites once, so the GUI can list them all before Start. Honour each
+    enumerate_configured_sats();
+}
+
+void Receiver::enumerate_configured_sats()
+{
+    // Enumerate the configured satellites, so the GUI can list them all before Start. Honour each
     // signal's PRN allowlist so the list matches the channels setup() will actually create.
+    configured_sats_.clear();
     for( const Signal_selection& sel : signal_selection_ )
     {
         const auto sig            = make_signal_for( sel );
@@ -54,6 +60,18 @@ Receiver::Receiver( Receiver_config config )
             }
         }
     }
+}
+
+void Receiver::set_signal_selection( std::vector<Signal_selection> selection )
+{
+    if( running_.load() )
+    {
+        return; // takes effect only on the next run; ignore a change mid-run
+    }
+    // Set exactly what was asked (empty = search nothing) so the GUI's live preview is faithful when all
+    // signals are unchecked - the default set is only the CONSTRUCTOR's fallback for an unspecified config.
+    signal_selection_ = std::move( selection );
+    enumerate_configured_sats();
 }
 
 Receiver::~Receiver() = default;

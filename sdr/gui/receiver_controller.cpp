@@ -50,3 +50,8 @@ void Receiver_controller::stop()
     }
     running_.store( false, std::memory_order_relaxed );
 }
+
+void Receiver_controller::apply_signal_selection( std::vector<Signal_selection> selection )
+{
+    receiver_.set_signal_selection( std::move( selection ) );
+}

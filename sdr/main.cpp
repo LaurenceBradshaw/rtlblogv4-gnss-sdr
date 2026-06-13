@@ -3,6 +3,7 @@
 #include <string>
 #include "logging.h"
 #include "receiver.h"
+#include "signal_selection.h"
 #ifdef SDR_GUI
 #include "gui_app.h"
 #endif
@@ -42,6 +43,15 @@ int main( int argc, char** argv )
           cxxopts::value<double>()->default_value( "-1" ) )
         ( "gui",         "Launch the graphical interface (requires a GUI build)",
           cxxopts::value<bool>()->default_value( "false" ) )
+        ( "signal",      "Signal to search, repeatable: CONSTELLATION[:COMPONENT], where "
+                         "CONSTELLATION=gps|galileo|beidou and COMPONENT=l1ca|e1b|b1i. Omit the component "
+                         "to search ALL of that constellation's components. e.g. --signal gps:l1ca "
+                         "--signal galileo  (default: gps galileo)",
+          cxxopts::value<std::vector<std::string>>() )
+        ( "prns",        "PRN allowlist for a constellation (repeatable): CONSTELLATION:LIST, applied to "
+                         "all of that constellation's selected components. e.g. --prns gps:1,4,6-32 "
+                         "--prns galileo:3,11  (default: all PRNs)",
+          cxxopts::value<std::vector<std::string>>() )
         ( "h,help",      "Show usage" );
 
     auto result = options.parse( argc, argv );
@@ -70,6 +80,14 @@ int main( int argc, char** argv )
         {
             config.file_path = result["file"].as<std::string>();
             config.format    = parse_iq_format( result["format"].as<std::string>() );
+        }
+        if( result.count( "signal" ) || result.count( "prns" ) )
+        {
+            const std::vector<std::string> sig =
+                result.count( "signal" ) ? result["signal"].as<std::vector<std::string>>() : std::vector<std::string> {};
+            const std::vector<std::string> prns =
+                result.count( "prns" ) ? result["prns"].as<std::vector<std::string>>() : std::vector<std::string> {};
+            config.selected_signals = parse_selection( sig, prns );
         }
 
         Receiver receiver( std::move( config ) );

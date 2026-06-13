@@ -1,4 +1,5 @@
 #include "main_window.h"
+#include <exception>
 #include <QFont>
 #include <QLabel>
 #include <QPushButton>
@@ -11,6 +12,7 @@
 #include "pvt_widget.h"
 #include "receiver_controller.h"
 #include "satellite_list_widget.h"
+#include "signals_widget.h"
 #include "sky_plot_widget.h"
 
 namespace
@@ -35,7 +37,7 @@ Main_window::Main_window( const Receiver& receiver, Receiver_controller& control
     start_button_ = new QPushButton( QStringLiteral( "Start" ), this );
     stop_button_  = new QPushButton( QStringLiteral( "Stop" ), this );
     stop_button_->setEnabled( false );
-    connect( start_button_, &QPushButton::clicked, this, [this] { controller_.start(); } );
+    connect( start_button_, &QPushButton::clicked, this, [this] { on_start(); } );
     connect( stop_button_, &QPushButton::clicked, this, [this] { controller_.stop(); } );
     toolbar->addWidget( start_button_ );
     toolbar->addWidget( stop_button_ );
@@ -47,6 +49,13 @@ Main_window::Main_window( const Receiver& receiver, Receiver_controller& control
     add_panel( new Pvt_widget );
     add_panel( new Satellite_list_widget( receiver ) );
     add_panel( new Sky_plot_widget );
+    signals_panel_ = new Signals_widget( receiver );
+    add_panel( signals_panel_ );
+
+    // Apply the Signals-tab selection on every tab switch (while stopped) so the Satellites list and the
+    // rest reflect it live, without waiting for Start. Connected after the panels exist so the tab-add
+    // above doesn't fire it early.
+    connect( tabs_, &QTabWidget::currentChanged, this, [this]( int ) { stage_signals(); } );
 
     // Persistent status bar (part of QMainWindow, so it stays across tab changes). The exec/stream/
     // channel readout sits on the left; the "behind real-time" warning is appended and only shown when
@@ -72,13 +81,53 @@ void Main_window::add_panel( Gui_panel* panel )
     tabs_->addTab( panel, panel->tab_title() );
 }
 
+void Main_window::on_start()
+{
+    // A malformed PRN box aborts Start with an in-panel error instead of running a half-built config.
+    if( !signals_panel_->validate() )
+    {
+        tabs_->setCurrentWidget( signals_panel_ );
+        return; // validate() already showed the error
+    }
+    const std::vector<Signal_selection> sel = signals_panel_->selection(); // valid -> won't throw
+    if( sel.empty() )
+    {
+        tabs_->setCurrentWidget( signals_panel_ );
+        signals_panel_->show_error( QStringLiteral( "Select at least one signal to search." ) );
+        return;
+    }
+    controller_.apply_signal_selection( sel );
+    controller_.start();
+}
+
+void Main_window::stage_signals()
+{
+    // Live pre-Start preview: push the current selection so configured_satellites() (the idle SV list)
+    // tracks it. Ignored while running.
+    if( controller_.is_running() )
+    {
+        return;
+    }
+    // A malformed PRN box keeps the user on the Signals tab until it is fixed (and validate() flags it).
+    if( !signals_panel_->validate() )
+    {
+        if( tabs_->currentWidget() != signals_panel_ )
+        {
+            tabs_->setCurrentWidget( signals_panel_ ); // re-fires currentChanged -> settles on this tab
+        }
+        return;
+    }
+    controller_.apply_signal_selection( signals_panel_->selection() );
+}
+
 void Main_window::refresh()
 {
     // Keep the buttons in step with the controller (which also flips back to stopped on its own when
     // an IQ file drains or the receiver errors out).
     const bool running = controller_.is_running();
-    start_button_->setEnabled( !running );
+    start_button_->setEnabled( !running && signals_panel_->is_valid() ); // can't Start with a malformed PRN list
     stop_button_->setEnabled( running );
+    signals_panel_->set_editable( !running ); // the selection can only change between runs
 
     const Gui_frame frame = view_.poll();
     for( Gui_panel* panel : panels_ )

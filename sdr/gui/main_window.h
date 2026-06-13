@@ -8,6 +8,7 @@ class QTimer;
 class QLabel;
 class QPushButton;
 class Gui_panel;
+class Signals_widget;
 class Receiver;
 class Receiver_controller;
 
@@ -24,9 +25,12 @@ public:
 private:
     void add_panel( Gui_panel* panel ); // take ownership (via Qt parent) + add a tab
     void refresh();                     // poll the receiver, push the frame to every panel + status bar
+    void on_start();                    // stage the Signals-tab selection, then start the receiver
+    void stage_signals();               // apply the Signals-tab selection now (live pre-Start preview)
 
     Receiver_view        view_;
     Receiver_controller& controller_;
+    Signals_widget*      signals_panel_ = nullptr; // for staging the selection on Start
 
     QTabWidget*             tabs_          = nullptr;
     QTimer*                 timer_         = nullptr;

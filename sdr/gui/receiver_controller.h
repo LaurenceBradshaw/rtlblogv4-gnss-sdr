@@ -1,6 +1,8 @@
 #pragma once
 #include <atomic>
 #include <thread>
+#include <vector>
+#include "signal_selection.h"
 
 class Receiver;
 
@@ -19,6 +21,10 @@ public:
 
     void start(); // run the receiver on a worker thread (no-op if already running)
     void stop();  // ask run() to exit and join the worker (no-op if not running)
+
+    // Stage the signal selection for the next run (forwards to Receiver::set_signal_selection; the
+    // receiver ignores it while running). Call before start().
+    void apply_signal_selection( std::vector<Signal_selection> selection );
 
     bool is_running() const
     {

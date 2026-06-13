@@ -60,12 +60,14 @@ int Satellite_list_widget::key_of( Constellation constellation, int prn )
 void Satellite_list_widget::update_frame( const Gui_frame& frame )
 {
     std::set<int>                      tracking_keys;
+    std::set<int>                      present_keys; // SVs in this frame; rows for any others are removed
     int                                tracking_count = 0;
     std::map<int, Cn0_bar_widget::Bar> bars; // keyed -> SV-sorted left-to-right
 
     for( const Channel_snapshot& s : frame.channels )
     {
         const int key = key_of( s.constellation, static_cast<int>( s.satellite_id ) );
+        present_keys.insert( key );
 
         Satellite_widget*& row = rows_[key];
         if( !row )
@@ -91,6 +93,22 @@ void Satellite_list_widget::update_frame( const Gui_frame& frame )
         if( auto it = detail_windows_.find( key ); it != detail_windows_.end() )
         {
             it->second->update_snapshot( s );
+        }
+    }
+
+    // Drop rows for SVs no longer in the frame (e.g. the signal selection changed on a restart). While
+    // running, every configured channel is always present, so this only fires on a configuration change.
+    for( auto it = rows_.begin(); it != rows_.end(); )
+    {
+        if( present_keys.count( it->first ) == 0 )
+        {
+            rows_layout_->removeWidget( it->second );
+            it->second->deleteLater();
+            it = rows_.erase( it );
+        }
+        else
+        {
+            ++it;
         }
     }
 
