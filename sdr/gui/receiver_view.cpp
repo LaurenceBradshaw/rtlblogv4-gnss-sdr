@@ -53,6 +53,9 @@ Gui_frame Receiver_view::poll() const
             double     azimuth_rad   = 0.0;
             look_angles( user, sat, elevation_rad, azimuth_rad );
 
+            // Sub-satellite ground point (nadir) for the map marker.
+            const Geodetic satg = ecef_to_geodetic( sat );
+
             Sky_satellite sky;
             sky.constellation = s.constellation;
             sky.satellite_id  = s.satellite_id;
@@ -60,6 +63,8 @@ Gui_frame Receiver_view::poll() const
             sky.elevation_deg = elevation_rad * 180.0 / M_PI;
             sky.cn0_db_hz     = s.cn0_db_hz;
             sky.has_lock      = s.has_lock;
+            sky.sub_lat_deg   = satg.lat_rad * 180.0 / M_PI;
+            sky.sub_lon_deg   = satg.lon_rad * 180.0 / M_PI;
             frame.sky.push_back( sky );
         }
     }

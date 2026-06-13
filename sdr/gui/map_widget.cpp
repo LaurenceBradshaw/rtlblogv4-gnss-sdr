@@ -94,6 +94,12 @@ void Map_widget::set_fix( double lat_deg, double lon_deg, bool valid )
     update();
 }
 
+void Map_widget::set_satellites( std::vector<Sat_marker> sats )
+{
+    sats_ = std::move( sats );
+    update();
+}
+
 void Map_widget::update_follow()
 {
     // Work in world pixels at the current zoom.
@@ -165,6 +171,24 @@ void Map_widget::paintEvent( QPaintEvent* )
                 p.fillRect( QRectF( sx, sy, TILE, TILE ), QColor( 50, 50, 50 ) );
             }
         }
+    }
+
+    // Satellite sub-satellite (nadir) markers. These sit far from the fix (the orbit is ~20 000 km
+    // up), so they are mostly only on-screen when zoomed out; draw only those within the viewport.
+    p.setRenderHint( QPainter::Antialiasing, true );
+    for( const Sat_marker& s : sats_ )
+    {
+        const double sx = lon_to_tile_x( s.lon_deg, z ) * TILE - origin_x;
+        const double sy = lat_to_tile_y( clamp_lat( s.lat_deg ), z ) * TILE - origin_y;
+        if( sx < -20 || sx > width() + 20 || sy < -20 || sy > height() + 20 )
+        {
+            continue; // off-screen
+        }
+        p.setPen( QPen( s.color.darker( 150 ), 1.5 ) );
+        p.setBrush( s.filled ? QBrush( s.color ) : Qt::NoBrush );
+        p.drawEllipse( QPointF( sx, sy ), 4.0, 4.0 );
+        p.setPen( s.color.lighter( 130 ) );
+        p.drawText( QPointF( sx + 6.0, sy + 4.0 ), s.label );
     }
 
     if( has_fix_ )

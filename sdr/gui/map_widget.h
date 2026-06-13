@@ -1,5 +1,7 @@
 #pragma once
+#include <vector>
 #include <QCache>
+#include <QColor>
 #include <QNetworkAccessManager>
 #include <QPixmap>
 #include <QPoint>
@@ -20,6 +22,18 @@ public:
     // Set the receiver fix (degrees). While following, the map re-centres on it; the first valid
     // fix also zooms in from the initial world view to a local view.
     void set_fix( double lat_deg, double lon_deg, bool valid );
+
+    // A satellite's sub-satellite (nadir) ground point, drawn as a labelled marker on the map.
+    struct Sat_marker
+    {
+        double  lat_deg;
+        double  lon_deg;
+        QColor  color;
+        QString label;  // e.g. "G05"
+        bool    filled; // carrier lock -> filled, else hollow
+    };
+    // Replace the set of satellite markers shown this frame.
+    void set_satellites( std::vector<Sat_marker> sats );
 
 protected:
     void paintEvent( QPaintEvent* event ) override;
@@ -47,6 +61,9 @@ private:
     bool   has_fix_ = false;
     double fix_lat_ = 0.0;
     double fix_lon_ = 0.0;
+
+    // Satellite ground markers (sub-satellite points), redrawn each frame.
+    std::vector<Sat_marker> sats_;
 
     // Panning
     bool   dragging_ = false;

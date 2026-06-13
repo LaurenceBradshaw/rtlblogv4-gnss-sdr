@@ -1,7 +1,9 @@
 #include "pvt_widget.h"
+#include <vector>
 #include <QFont>
 #include <QLabel>
 #include <QVBoxLayout>
+#include "gnss_format.h"
 #include "gui_frame.h"
 #include "map_widget.h"
 
@@ -45,6 +47,7 @@ void Pvt_widget::update_frame( const Gui_frame& frame )
         velocity_->clear();
         clock_->clear();
         map_->set_fix( 0.0, 0.0, false );
+        map_->set_satellites( {} );
         return;
     }
 
@@ -58,6 +61,21 @@ void Pvt_widget::update_frame( const Gui_frame& frame )
         ) );
         map_->set_fix( frame.lat_deg, frame.lon_deg, true );
     }
+
+    // Plot the satellites at their sub-satellite (ground) points; only visible when zoomed out.
+    std::vector<Map_widget::Sat_marker> markers;
+    markers.reserve( frame.sky.size() );
+    for( const Sky_satellite& sv : frame.sky )
+    {
+        markers.push_back( Map_widget::Sat_marker {
+            sv.sub_lat_deg,
+            sv.sub_lon_deg,
+            gui_format::constellation_color( sv.constellation ),
+            QString::asprintf( "%s%02d", gui_format::constellation_prefix( sv.constellation ), sv.satellite_id ),
+            sv.has_lock
+        } );
+    }
+    map_->set_satellites( std::move( markers ) );
 
     position_->setText( QString::asprintf(
         "ECEF  x = %12.1f m    y = %12.1f m    z = %12.1f m", p.ecef_x_m, p.ecef_y_m, p.ecef_z_m
