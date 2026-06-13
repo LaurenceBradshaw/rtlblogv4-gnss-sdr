@@ -300,3 +300,96 @@ bool Acquisition_engine::check_acquisition()
 
     return result_.found;
 }
+
+#ifdef ENABLE_UNIT_TESTS
+#include <cstdint>
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include "cttc_gps_l1_snippet.h"
+
+namespace
+{
+constexpr double ACQ_FS = 4.0e6; // match the CTTC capture
+
+// Build one acquisition block (m = acq_fft_factor * n complex samples) of a noise-free GPS L1 C/A
+// signal: the PRN code (real +/-1) starting at sample offset `code_phase`, on a carrier of doppler_hz.
+Complex_buf synth_block( const Complex_buf& code, int m, int code_phase, double doppler_hz )
+{
+    const int    n  = static_cast<int>( code.size() );
+    const double ti = 1.0 / ACQ_FS;
+    Complex_buf  blk( m );
+    for( int j = 0; j < m; ++j )
+    {
+        const int    idx = ( ( ( j - code_phase ) % n ) + n ) % n;
+        const float  c   = code[idx].real();
+        const double ph  = 2.0 * M_PI * doppler_hz * j * ti;
+        blk[j]           = Complex_sample( c * std::cos( ph ), c * std::sin( ph ) );
+    }
+    return blk;
+}
+} // namespace
+
+// Synthesised (pure-signal) acquisition: a noise-free GPS L1 C/A code on a known carrier at a known
+// code phase must be found at exactly that code phase and Doppler. NOTE the receiver's signal-in-Q
+// convention flips the reported Doppler sign (an injected +f comes back as -f); see [[iq-convention-flip]].
+TEST_CASE( "acquisition_synthetic_gps_signal", "[acquisition][gps]" )
+{
+    auto              sig  = make_signal( Constellation::Gps, Band::L1, Code::CA );
+    const Complex_buf code = sig->code_samples( /*prn=*/1, ACQ_FS );
+    const int         m    = sig->params().acq_fft_factor * static_cast<int>( code.size() );
+
+    const int    inject_phase   = 137;
+    const double inject_doppler = 2000.0;
+    const Complex_buf blk = synth_block( code, m, inject_phase, inject_doppler );
+
+    Acquisition_aiding aiding;
+    Acquisition_engine acq( code, ACQ_FS, sig->params(), aiding );
+    Sample_block       block { blk.data(), blk.size(), nullptr, 0 };
+    for( int i = 0; i < acq.target_integrations(); ++i )
+    {
+        acq.integrate( block );
+    }
+    const Acquisition_result r = acq.result();
+    REQUIRE( r.found );
+    REQUIRE( r.metric > Acquisition_engine::ACQTH );
+    REQUIRE( r.code_phase == Catch::Approx( inject_phase ).margin( 1.0 ) );
+    REQUIRE( r.doppler_hz == Catch::Approx( -inject_doppler ).margin( 100.0 ) ); // sign-flipped convention
+}
+
+// Real-data acquisition: a small hardcoded slice of the CTTC capture (see cttc_gps_l1_snippet.h). A
+// present satellite (GPS PRN 1) must acquire at the same Doppler the live receiver reports (-7033 Hz);
+// an absent one (PRN 4) must not. One 2 ms block is enough (PRN 1 peak ratio ~6 vs PRN 4 ~1.5).
+// TODO: add a Galileo E1 real-data acquisition fixture once the outstanding Galileo issues are sorted.
+TEST_CASE( "acquisition_cttc_real_gps_prn1", "[acquisition][gps][cttc]" )
+{
+    auto      sig = make_signal( Constellation::Gps, Band::L1, Code::CA );
+    const int m   = sig->params().acq_fft_factor * static_cast<int>( sig->code_samples( 1, CTTC_SNIPPET_FS ).size() );
+    REQUIRE( 2 * m == static_cast<int>( std::size( CTTC_GPS_L1_SNIPPET ) ) ); // one block of I/Q pairs
+
+    Complex_buf samples( m );
+    for( int i = 0; i < m; ++i )
+    {
+        samples[i] = Complex_sample( CTTC_GPS_L1_SNIPPET[2 * i] / 32767.0f, CTTC_GPS_L1_SNIPPET[2 * i + 1] / 32767.0f );
+    }
+    Sample_block block { samples.data(), samples.size(), nullptr, 0 };
+
+    SECTION( "present satellite acquires" )
+    {
+        Acquisition_aiding aiding;
+        Acquisition_engine acq( sig->code_samples( 1, CTTC_SNIPPET_FS ), CTTC_SNIPPET_FS, sig->params(), aiding );
+        REQUIRE( acq.integrate( block ) );
+        const Acquisition_result r = acq.result();
+        REQUIRE( r.found );
+        REQUIRE( r.metric > Acquisition_engine::ACQTH );
+        REQUIRE( r.cn0_db_hz > 40.0 );
+        REQUIRE( r.doppler_hz == Catch::Approx( -7033.0 ).margin( 250.0 ) );
+    }
+    SECTION( "absent satellite does not acquire" )
+    {
+        Acquisition_aiding aiding;
+        Acquisition_engine acq( sig->code_samples( 4, CTTC_SNIPPET_FS ), CTTC_SNIPPET_FS, sig->params(), aiding );
+        REQUIRE_FALSE( acq.integrate( block ) );
+        REQUIRE( acq.result().metric < Acquisition_engine::ACQTH );
+    }
+}
+#endif

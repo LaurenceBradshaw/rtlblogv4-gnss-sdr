@@ -13,6 +13,7 @@
 #include "iq_file_device.h" // Iq_sample_format
 #include "observation.h"
 #include "position.h"
+#include "signal_selection.h" // Signal_id
 
 class Stream_device;
 class Sample_buffer;
@@ -30,6 +31,11 @@ struct Receiver_config
     Iq_sample_format format         = Iq_sample_format::INT16; // file source
     int              device_index   = 0;                       // RTL-SDR
     double           gain_db        = -1.0;                    // RTL-SDR; <0 => hardware AGC
+
+    // Which signals to search, each with its own PRN allowlist (empty set = all PRNs in that signal's
+    // range). Empty list -> default_signal_selection() (GPS L1 C/A + Galileo E1-B, all PRNs).
+    // (Not named `signals` - that is a Qt macro in the GUI build.)
+    std::vector<Signal_selection> selected_signals;
 };
 
 // Timing/progress of the processing loop, published for the GUI status bar. exec = wall-clock since
@@ -107,7 +113,8 @@ private:
     }
 
     Receiver_config                   config_;
-    std::vector<Configured_satellite> configured_sats_; // fixed at construction
+    std::vector<Signal_selection>     signal_selection_; // resolved from config_ (or the default set)
+    std::vector<Configured_satellite> configured_sats_;  // fixed at construction
     std::atomic<bool>                 running_ { false };
 
     std::unique_ptr<Sample_buffer>        sample_buffer_;

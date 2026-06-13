@@ -664,3 +664,105 @@ Position_solver::compute_solution( const std::vector<Satellite_measurement>& mea
     }
     return as_solution();
 }
+
+#ifdef ENABLE_UNIT_TESTS
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+namespace
+{
+const double DEG = M_PI / 180.0;
+
+Ecef geodetic_to_ecef( double lat, double lon, double alt )
+{
+    constexpr double A = 6378137.0, F = 1.0 / 298.257223563, E2 = F * ( 2.0 - F );
+    const double     s = std::sin( lat );
+    const double     N = A / std::sqrt( 1.0 - E2 * s * s );
+    return { ( N + alt ) * std::cos( lat ) * std::cos( lon ), ( N + alt ) * std::cos( lat ) * std::sin( lon ),
+             ( N * ( 1.0 - E2 ) + alt ) * s };
+}
+
+// A satellite at azimuth/elevation (rad) and slant range from the user, placed in ECEF via the
+// local ENU frame at the user's geodetic location - guarantees a known elevation + good geometry.
+Ecef sat_from_look( const Ecef& user, double lat, double lon, double az, double el, double range )
+{
+    const double e = std::cos( el ) * std::sin( az ), n = std::cos( el ) * std::cos( az ), u = std::sin( el );
+    const double sl = std::sin( lat ), cl = std::cos( lat ), so = std::sin( lon ), co = std::cos( lon );
+    const double dx = -so * e - sl * co * n + cl * co * u;
+    const double dy = co * e - sl * so * n + cl * so * u;
+    const double dz = cl * n + sl * u;
+    return { user.x + range * dx, user.y + range * dy, user.z + range * dz };
+}
+} // namespace
+
+TEST_CASE( "ekf_converges_to_known_truth", "[pvt][position][ekf]" )
+{
+    // Truth: a static receiver with a known clock bias + drift, and GPS satellites spread across the
+    // sky. Build NOISE-FREE pseudoranges pr = |sat - user| + clock_bias (the sat-clock/iono/Sagnac
+    // corrections live upstream in observation.cpp, not the solver), and rates prr = clock_drift
+    // (static rx, static sats). The filter must recover the truth exactly (to numerical precision).
+    const double lat = 45.0 * DEG, lon = 10.0 * DEG, alt = 120.0;
+    const Ecef   user = geodetic_to_ecef( lat, lon, alt );
+    const double cb_truth = 12345.0;   // receiver clock bias (m)
+    const double cd_truth = -1600.0;   // receiver clock drift (m/s)
+
+    struct
+    {
+        double az_deg, el_deg;
+    } look[] = { { 30, 72 }, { 95, 18 }, { 150, 45 }, { 210, 28 }, { 275, 61 }, { 340, 35 }, { 60, 12 } };
+
+    // Static satellites: fixed ECEF positions + geometric ranges to the (static) user.
+    std::vector<Ecef>   sat_pos;
+    std::vector<double> range;
+    for( const auto& lk : look )
+    {
+        const Ecef s = sat_from_look( user, lat, lon, lk.az_deg * DEG, lk.el_deg * DEG, 22.0e6 );
+        sat_pos.push_back( s );
+        range.push_back( std::sqrt(
+            ( s.x - user.x ) * ( s.x - user.x ) + ( s.y - user.y ) * ( s.y - user.y ) + ( s.z - user.z ) * ( s.z - user.z )
+        ) );
+    }
+
+    Position_solver   solver;
+    Position_solution sol {};
+    const int         epochs = 40;
+    double            t      = 0.0;
+    for( int epoch = 0; epoch < epochs; ++epoch )
+    {
+        t = static_cast<double>( epoch );
+        // Time-consistent measurements: the clock bias evolves as cb(t) = cb0 + cd*t, so the
+        // pseudorange does too (the coupled EKF clock model expects exactly this). The rate is cd.
+        const double cb_t = cb_truth + cd_truth * t;
+        std::vector<Satellite_measurement> meas;
+        for( size_t i = 0; i < sat_pos.size(); ++i )
+        {
+            Satellite_measurement m {};
+            m.satellite_id         = static_cast<Satellite_id>( i + 1 );
+            m.constellation        = Constellation::Gps;
+            m.satellite_pos_x      = sat_pos[i].x;
+            m.satellite_pos_y      = sat_pos[i].y;
+            m.satellite_pos_z      = sat_pos[i].z;
+            m.pseudorange_m        = range[i] + cb_t;
+            m.pseudorange_rate_m_s = cd_truth; // static sat + static rx -> rate is pure clock drift
+            m.elevation_rad        = look[i].el_deg * DEG;
+            meas.push_back( m );
+        }
+        auto out = solver.compute_solution( meas, t );
+        REQUIRE( out.has_value() ); // seeds on the first epoch (good geometry, 7 sats)
+        sol = *out;
+    }
+
+    REQUIRE( sol.valid );
+    REQUIRE( sol.reference == Constellation::Gps );
+    REQUIRE_FALSE( sol.isb_present[static_cast<int>( Constellation::Gps )] ); // single-constellation: no ISB
+    REQUIRE( sol.ecef_x_m == Catch::Approx( user.x ).margin( 1e-3 ) );
+    REQUIRE( sol.ecef_y_m == Catch::Approx( user.y ).margin( 1e-3 ) );
+    REQUIRE( sol.ecef_z_m == Catch::Approx( user.z ).margin( 1e-3 ) );
+    REQUIRE( sol.clock_bias_m == Catch::Approx( cb_truth + cd_truth * t ).margin( 1e-2 ) );
+    // Velocity/drift states converge over the run to the static truth.
+    REQUIRE( sol.ecef_x_m_s == Catch::Approx( 0.0 ).margin( 1e-2 ) );
+    REQUIRE( sol.ecef_y_m_s == Catch::Approx( 0.0 ).margin( 1e-2 ) );
+    REQUIRE( sol.ecef_z_m_s == Catch::Approx( 0.0 ).margin( 1e-2 ) );
+    REQUIRE( sol.clock_drift_m_s == Catch::Approx( cd_truth ).margin( 1e-2 ) );
+}
+#endif

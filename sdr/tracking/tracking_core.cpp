@@ -338,14 +338,44 @@ void Tracking_core::clear_cumsum()
     sum_Q_.fill( 0.0 );
 }
 
+// Pure lock-detector math, factored out so it can be unit-tested directly (the estimator now feeds both
+// the GUI C/N0 display and the PVT observable gate, so it is worth pinning).
+namespace
+{
+// M2M4 (2nd/4th-moment) C/N0 estimate (dB-Hz) from the window-averaged prompt-power moments
+// M2 = <P>, M4 = <P^2> (P = I^2+Q^2). Signal power Pd = sqrt(2*M2^2 - M4), noise Pn = M2 - Pd,
+// SNR = Pd/Pn, C/N0 = 10*log10(SNR / Tcoh). Returns 0 when the moments are inconsistent with a
+// coherent signal (no positive SNR). Scale-invariant: scaling P by k leaves the SNR (a ratio) fixed.
+double m2m4_cn0_db_hz( double m2, double m4, double epoch_period_s )
+{
+    const double pd2 = 2.0 * m2 * m2 - m4; // signal power squared (negative when no coherent signal)
+    if( pd2 <= 0.0 || m2 <= 0.0 )
+    {
+        return 0.0;
+    }
+    const double pd = std::sqrt( pd2 );
+    const double pn = m2 - pd;
+    if( pn <= 0.0 )
+    {
+        return 0.0;
+    }
+    return 10.0 * std::log10( ( pd / pn ) / epoch_period_s );
+}
+
+// Van Dierendonck carrier lock test cos(2*phi) ~ NBD/NBP, where NBD = sum(I^2 - Q^2) and
+// NBP = sum(I^2 + Q^2) over the window. ~+1 phase-locked (energy on I), <=0 carrier lost.
+double carrier_lock_cos2phi( double nbd_sum, double nbp_sum )
+{
+    return ( nbp_sum > 0.0 ) ? nbd_sum / nbp_sum : 0.0;
+}
+} // namespace
+
 // update_lock_detectors
 // Two complementary detectors over a window of CN0_WINDOW_EPOCHS, then a hysteretic lock decision.
 //
-// (1) M2M4 (2nd/4th-moment) C/N0 on the prompt power P = I^2 + Q^2:
-//       M2 = <P>, M4 = <P^2>;  signal power Pd = sqrt(2*M2^2 - M4),  noise Pn = M2 - Pd;
-//       SNR = Pd/Pn  ->  C/N0(dB-Hz) = 10*log10(SNR / Tcoh),  Tcoh = epoch_period_.
-//     P is sign-insensitive (data flips don't matter) and the SNR is a ratio (scale-invariant), so this
-//     is identical for every signal; only epoch_period_ sets the dB-Hz offset.
+// (1) M2M4 C/N0 on the prompt power P = I^2 + Q^2 (see m2m4_cn0_db_hz). P is sign-insensitive (data
+//     flips don't matter) and the SNR is a ratio (scale-invariant), so this is identical for every
+//     signal; only epoch_period_ sets the dB-Hz offset.
 // (2) Van Dierendonck carrier lock test cos(2*phi) ~ (<I^2> - <Q^2>) / (<I^2> + <Q^2>): ~+1 when the
 //     carrier is phase-locked (all energy on I), <=0 when it is lost. Power-difference form (data-robust;
 //     see the header notes on why not the coherent (sum I)^2 one).
@@ -363,24 +393,9 @@ void Tracking_core::update_lock_detectors( double prompt_i, double prompt_q )
         return;
     }
 
-    // (1) M2M4 C/N0.
-    const double m2  = m2_sum_ / cn0_count_;
-    const double m4  = m4_sum_ / cn0_count_;
-    const double pd2 = 2.0 * m2 * m2 - m4; // signal power squared (negative when no coherent signal)
-
-    double cn0 = 0.0;
-    if( pd2 > 0.0 && m2 > 0.0 )
-    {
-        const double pd = std::sqrt( pd2 );
-        const double pn = m2 - pd;
-        if( pn > 0.0 )
-        {
-            cn0 = 10.0 * std::log10( ( pd / pn ) / epoch_period_ );
-        }
-    }
-
-    // (2) Carrier lock test (NBP = sum of I^2+Q^2 = m2_sum_; NBD = sum of I^2-Q^2 = nbd_sum_).
-    const double lock_test = ( m2_sum_ > 0.0 ) ? nbd_sum_ / m2_sum_ : 0.0;
+    // (1) M2M4 C/N0. (2) Carrier lock test (NBP = sum I^2+Q^2 = m2_sum_; NBD = sum I^2-Q^2 = nbd_sum_).
+    const double cn0       = m2m4_cn0_db_hz( m2_sum_ / cn0_count_, m4_sum_ / cn0_count_, epoch_period_ );
+    const double lock_test = carrier_lock_cos2phi( nbd_sum_, m2_sum_ );
 
     // EMA-smooth both (seed on the first window so they converge quickly).
     if( !lock_seeded_ )
@@ -658,3 +673,75 @@ void Tracking_core::advance_secondary_sync()
         clear_cumsum(); // restart coherent accumulation cleanly post-sync
     }
 }
+
+#ifdef ENABLE_UNIT_TESTS
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+namespace
+{
+// Closed-form prompt-power moments for a coherent signal of power Pd in complex Gaussian noise of
+// power Pn: M2 = Pd + Pn, M4 = Pd^2 + 4*Pd*Pn + 2*Pn^2. The M2M4 estimator inverts these exactly.
+void moments_for( double pd, double pn, double& m2, double& m4 )
+{
+    m2 = pd + pn;
+    m4 = pd * pd + 4.0 * pd * pn + 2.0 * pn * pn;
+}
+} // namespace
+
+TEST_CASE( "m2m4_cn0_recovers_known_snr", "[tracking][cn0]" )
+{
+    // Feed moments synthesised from a known Pd/Pn -> the estimator must return 10*log10(SNR/T).
+    struct
+    {
+        double pd, pn, t;
+    } cases[] = { { 100.0, 1.0, 1e-3 }, { 50.0, 2.0, 1e-3 }, { 10.0, 5.0, 4e-3 }, { 1000.0, 7.0, 1e-3 } };
+    for( const auto& c : cases )
+    {
+        double m2 = 0.0, m4 = 0.0;
+        moments_for( c.pd, c.pn, m2, m4 );
+        const double expected = 10.0 * std::log10( ( c.pd / c.pn ) / c.t );
+        INFO( "Pd=" << c.pd << " Pn=" << c.pn << " T=" << c.t );
+        REQUIRE( m2m4_cn0_db_hz( m2, m4, c.t ) == Catch::Approx( expected ) );
+    }
+}
+
+TEST_CASE( "m2m4_cn0_is_scale_invariant", "[tracking][cn0]" )
+{
+    double m2 = 0.0, m4 = 0.0;
+    moments_for( 80.0, 3.0, m2, m4 );
+    const double base = m2m4_cn0_db_hz( m2, m4, 1e-3 );
+    // Scaling the prompt power by k scales M2 by k and M4 by k^2; the SNR (a ratio) is unchanged.
+    for( double k : { 0.01, 4.0, 1000.0 } )
+    {
+        REQUIRE( m2m4_cn0_db_hz( k * m2, k * k * m4, 1e-3 ) == Catch::Approx( base ) );
+    }
+}
+
+TEST_CASE( "m2m4_cn0_zero_when_no_coherent_signal", "[tracking][cn0]" )
+{
+    // Pure noise (Pd=0): M2=Pn, M4=2*Pn^2 -> 2*M2^2 - M4 = 0 -> no positive SNR -> 0 dB-Hz.
+    double m2 = 0.0, m4 = 0.0;
+    moments_for( 0.0, 5.0, m2, m4 );
+    REQUIRE( m2m4_cn0_db_hz( m2, m4, 1e-3 ) == 0.0 );
+    // Inconsistent moments (M4 above the coherent bound) also clamp to 0.
+    REQUIRE( m2m4_cn0_db_hz( 10.0, 1000.0, 1e-3 ) == 0.0 );
+}
+
+TEST_CASE( "carrier_lock_cos2phi_matches_phase", "[tracking][lock]" )
+{
+    // I = A*cos(phi), Q = A*sin(phi): NBD/NBP = (I^2 - Q^2)/(I^2 + Q^2) = cos(2*phi).
+    const double A = 3.0;
+    for( double deg : { 0.0, 30.0, 45.0, 60.0, 90.0 } )
+    {
+        const double phi = deg * M_PI / 180.0;
+        const double i   = A * std::cos( phi );
+        const double q   = A * std::sin( phi );
+        const double nbd = i * i - q * q;
+        const double nbp = i * i + q * q;
+        INFO( "phi=" << deg << " deg" );
+        REQUIRE( carrier_lock_cos2phi( nbd, nbp ) == Catch::Approx( std::cos( 2.0 * phi ) ).margin( 1e-12 ) );
+    }
+    REQUIRE( carrier_lock_cos2phi( 0.0, 0.0 ) == 0.0 ); // guarded: no power -> 0
+}
+#endif

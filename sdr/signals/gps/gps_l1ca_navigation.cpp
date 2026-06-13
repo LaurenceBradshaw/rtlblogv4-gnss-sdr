@@ -1,4 +1,6 @@
 #include "gps_l1ca_navigation.h"
+#include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -610,7 +612,10 @@ Gps_l1ca_decoder::Tow_status Gps_l1ca_decoder::classify_tow( double tow )
 }
 
 #ifdef ENABLE_UNIT_TESTS
+#include <array>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include "orbit.h"
 
 TEST_CASE( "gps_getbitu_extracts_msb_first", "[gps][nav][bits]" )
 {
@@ -696,5 +701,79 @@ TEST_CASE( "gps_parity_round_trip_over_data", "[gps][nav][parity]" )
             REQUIRE_FALSE( parity_check_word( flipped ) );
         }
     }
+}
+
+namespace
+{
+// Parse a 76-char hex string into the 38-byte packed subframe buffer.
+std::array<uint8_t, 38> sf_from_hex( const char* hex )
+{
+    auto nib = []( char ch ) -> int {
+        if( ch >= '0' && ch <= '9' )
+            return ch - '0';
+        return ( ch | 0x20 ) - 'a' + 10; // lower-case a-f
+    };
+    std::array<uint8_t, 38> buf {};
+    for( int i = 0; i < 38; ++i )
+    {
+        buf[i] = static_cast<uint8_t>( ( nib( hex[2 * i] ) << 4 ) | nib( hex[2 * i + 1] ) );
+    }
+    return buf;
+}
+
+// Real GPS L1 C/A subframes 1/2/3 for PRN 1, captured from the CTTC capture (one consistent
+// ephemeris set: IODC 11 == IODE 11). Used as a decode regression + physical-plausibility fixture.
+constexpr const char* CTTC_PRN1_SF1 = "8B10B435DFF89A3B19000009C420F3E2494088818F0567D8A120C2D6DA0D00001E0806E136B0";
+constexpr const char* CTTC_PRN1_SF2 = "8B10B435DFFAACB0B017558CD3DD81791C4F140558021DF36C20855528460D9823456DA156F0";
+constexpr const char* CTTC_PRN1_SF3 = "8B10B435DFFCBBBFFECED7081E8E430010278C872DEB516CC0C77370D3F1FFA8A8082C3A6E70";
+} // namespace
+
+TEST_CASE( "gps_decode_real_subframes_prn1", "[gps][nav][ephemeris][cttc]" )
+{
+    const auto sf1 = sf_from_hex( CTTC_PRN1_SF1 );
+    const auto sf2 = sf_from_hex( CTTC_PRN1_SF2 );
+    const auto sf3 = sf_from_hex( CTTC_PRN1_SF3 );
+
+    Gps_ephemeris e;
+    Iono          iono;
+    REQUIRE( decode_gps_frame( sf1.data(), e, iono ) == 1 ); // dispatch by the HOW subframe id
+    REQUIRE( decode_gps_frame( sf2.data(), e, iono ) == 2 );
+    REQUIRE( decode_gps_frame( sf3.data(), e, iono ) == 3 );
+
+    // Issue-of-data consistency (the gate the decoder uses to publish an ephemeris).
+    REQUIRE( e.iodc == 11 );
+    REQUIRE( e.iode == 11 );
+    REQUIRE( ( e.iodc & 0xFF ) == e.iode );
+
+    // Regression: pin the decoded fields (scale factors + bit positions) against the captured values.
+    // The 10-bit broadcast week is deterministic; the absolute week from adjust_gps_week() is NOT (it
+    // resolves the rollover against the system clock), so check the broadcast value modulo 1024.
+    REQUIRE( ( e.week & 1023 ) == 710 );
+    REQUIRE( e.toc == Catch::Approx( 374400.0 ) );
+    REQUIRE( e.toe == Catch::Approx( 374400.0 ) );
+    REQUIRE( e.sqrt_a == Catch::Approx( 5153.699286 ).epsilon( 1e-9 ) );
+    REQUIRE( e.e == Catch::Approx( 1.702986890e-3 ).epsilon( 1e-7 ) );
+    REQUIRE( e.m0 == Catch::Approx( 2.907767059 ).epsilon( 1e-7 ) );
+    REQUIRE( e.delta_n == Catch::Approx( 4.691266839e-9 ).epsilon( 1e-6 ) );
+    REQUIRE( e.omega0 == Catch::Approx( -0.4632164247 ).epsilon( 1e-7 ) );
+    REQUIRE( e.omega == Catch::Approx( 0.3142515846 ).epsilon( 1e-7 ) );
+    REQUIRE( e.omegadot == Catch::Approx( -7.986046937e-9 ).epsilon( 1e-6 ) );
+    REQUIRE( e.i0 == Catch::Approx( 0.9604440504 ).epsilon( 1e-7 ) );
+    REQUIRE( e.idot == Catch::Approx( 3.335853237e-10 ).epsilon( 1e-6 ) );
+    REQUIRE( e.crs == Catch::Approx( 11.656250 ) );
+    REQUIRE( e.crc == Catch::Approx( 182.375000 ) );
+    REQUIRE( e.af0 == Catch::Approx( 1.312186942e-5 ).epsilon( 1e-7 ) );
+    REQUIRE( e.group_delay == Catch::Approx( 8.381903172e-9 ).epsilon( 1e-6 ) );
+
+    // Physical plausibility (non-circular): the decoded Keplerian elements must describe a real GPS
+    // orbit. If any scale factor / bit field were wrong, these would not hold.
+    REQUIRE( e.e < 0.03 );                                   // GPS eccentricity is small
+    REQUIRE( e.sqrt_a * e.sqrt_a == Catch::Approx( 26.56e6 ).epsilon( 0.01 ) ); // semi-major ~26 560 km
+    REQUIRE( e.i0 > 0.9 );                                   // inclination ~55 deg
+    REQUIRE( e.i0 < 1.05 );
+    e.constellation = Constellation::Gps;
+    const Ecef p = orbit::satellite_ecef_pos( e, e.toe, Constellation::Gps );
+    const double r = std::sqrt( p.x * p.x + p.y * p.y + p.z * p.z );
+    REQUIRE( r == Catch::Approx( 26.56e6 ).epsilon( 0.02 ) ); // a real orbit radius from decoded elements
 }
 #endif

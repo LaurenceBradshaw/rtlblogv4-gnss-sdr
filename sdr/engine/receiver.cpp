@@ -25,29 +25,33 @@ size_t next_power_of_two( size_t n )
 
 constexpr uint32_t GNSS_L1_HZ = 1575420000U; // GPS L1 C/A + Galileo E1 band centre
 
-// The signals to search, one make_signal() per (constellation, band, code). Single source of truth
-// for both setup() (which owns them) and the configured-satellite enumeration. Combined GPS + Galileo:
+// Build the Signal object for one selection entry (make_signal per (constellation, band, code)).
 // GPS anchors the fix + receiver clock; Galileo adds SVs via the EKF inter-system-bias state.
-// TODO: make this come from Receiver_config once the GUI signal-selection tab lands.
-std::vector<std::unique_ptr<Signal>> make_configured_signals()
+std::unique_ptr<Signal> make_signal_for( const Signal_selection& sel )
 {
-    std::vector<std::unique_ptr<Signal>> signals;
-    signals.push_back( make_signal( Constellation::Gps, Band::L1, Code::CA ) );
-    signals.push_back( make_signal( Constellation::Galileo, Band::E1, Code::B ) );
-    return signals;
+    return make_signal( sel.id.constellation, sel.id.band, sel.id.code );
 }
 } // namespace
 
 Receiver::Receiver( Receiver_config config )
     : config_( std::move( config ) )
 {
-    // Enumerate the configured satellites once, so the GUI can list them all before Start.
-    for( const auto& sig : make_configured_signals() )
+    // Resolve the signal selection once (empty config -> the default GPS + Galileo set), so the
+    // constructor's satellite enumeration and setup()'s channel creation always agree.
+    signal_selection_ = config_.selected_signals.empty() ? default_signal_selection() : config_.selected_signals;
+
+    // Enumerate the configured satellites once, so the GUI can list them all before Start. Honour each
+    // signal's PRN allowlist so the list matches the channels setup() will actually create.
+    for( const Signal_selection& sel : signal_selection_ )
     {
+        const auto sig            = make_signal_for( sel );
         const auto [sv_lo, sv_hi] = sig->sv_range();
         for( int sv = sv_lo; sv <= sv_hi; ++sv )
         {
-            configured_sats_.push_back( { sig->params().constellation, sv } );
+            if( prn_selected( sel.prns, sv ) )
+            {
+                configured_sats_.push_back( { sig->params().constellation, sv } );
+            }
         }
     }
 }
@@ -100,24 +104,44 @@ void Receiver::setup()
     }
 
     // Signals to search for. The objects must outlive the channels (channels hold a const reference).
-    signals_ = make_configured_signals();
-
-    // Passive channels (no per-channel thread): one per (signal, SV). A Thread_pool of
-    // N workers does the correlation work; the Scheduler hands ready channels to it.
-    for( const auto& sig : signals_ )
+    // signals_[i] pairs with signal_selection_[i] (same order), so each uses its own PRN allowlist.
+    for( const Signal_selection& sel : signal_selection_ )
     {
-        const auto [sv_lo, sv_hi] = sig->sv_range();
+        signals_.push_back( make_signal_for( sel ) );
+    }
+
+    // Passive channels (no per-channel thread): one per (signal, selected SV). A Thread_pool of
+    // N workers does the correlation work; the Scheduler hands ready channels to it.
+    for( size_t i = 0; i < signals_.size(); ++i )
+    {
+        const Signal&             sig         = *signals_[i];
+        const std::set<int>&      prn_filter  = signal_selection_[i].prns;
+        const auto [sv_lo, sv_hi]             = sig.sv_range();
         for( int sv = sv_lo; sv <= sv_hi; sv++ )
         {
+            if( !prn_selected( prn_filter, sv ) )
+            {
+                continue;
+            }
             channels_.push_back( std::make_unique<Channel>(
-                *sig, static_cast<Satellite_id>( sv ), sample_rate_hz, *sample_buffer_, aiding_
+                sig, static_cast<Satellite_id>( sv ), sample_rate_hz, *sample_buffer_, aiding_
             ) );
         }
     }
 
+    std::string sig_list;
+    for( const Signal_selection& s : signal_selection_ )
+    {
+        const std::string prns = s.prns.empty() ? "all" : fmt::format( "{}", s.prns.size() );
+        sig_list += fmt::format(
+            "{}{}:{}({} PRNs)", sig_list.empty() ? "" : ", ", signal_token( s.id ), signal_name( s.id ), prns
+        );
+    }
     logging::log(
         logging::Level::Info,
-        fmt::format( "Streaming {} at {} Hz - launching {} channels", source_desc, sample_rate_hz, channels_.size() )
+        fmt::format(
+            "Streaming {} at {} Hz - signals [{}] - launching {} channels", source_desc, sample_rate_hz, sig_list, channels_.size()
+        )
     );
 
     const unsigned num_workers = std::max( 1u, std::thread::hardware_concurrency() );

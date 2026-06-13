@@ -1,6 +1,17 @@
 #include "costas_tracker.h"
 #include <cmath>
 
+namespace
+{
+// Normalised early-minus-late envelope discriminator (GNSS-SDRLIB dll()). pE, pL are the early/late
+// correlator magnitudes. Result in (-1, 1): >0 when the code replica is late (early stronger), 0 at
+// the correlation peak (pE == pL). The 1e-10 guards the all-zero (no-signal) case.
+double normalised_early_late( double pE, double pL )
+{
+    return ( pE - pL ) / ( pE + pL + 1e-10 );
+}
+} // namespace
+
 // 3-tap correlator: Prompt[0], Early[1] at -s, Late[2] at +s (s = corr_spacing_ samples).
 void Costas_tracker::configure_taps( double ci )
 {
@@ -16,7 +27,7 @@ double Costas_tracker::code_error() const
 {
     const double pE = std::sqrt( sum_I_[1] * sum_I_[1] + sum_Q_[1] * sum_Q_[1] );
     const double pL = std::sqrt( sum_I_[2] * sum_I_[2] + sum_Q_[2] * sum_Q_[2] );
-    return ( pE - pL ) / ( pE + pL + 1e-10 );
+    return normalised_early_late( pE, pL );
 }
 
 // run_loops
@@ -59,3 +70,22 @@ void Costas_tracker::run_loops( bool bit_sync, bool sw_loop, Satellite_id /*prn*
 
     ++epoch_count_;
 }
+
+#ifdef ENABLE_UNIT_TESTS
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+TEST_CASE( "dll_normalised_early_late_discriminator", "[tracking][dll]" )
+{
+    // Peak: equal early/late envelopes -> zero error.
+    REQUIRE( normalised_early_late( 5.0, 5.0 ) == Catch::Approx( 0.0 ) );
+    // Early stronger (replica late) -> positive; late stronger -> negative; antisymmetric.
+    REQUIRE( normalised_early_late( 3.0, 1.0 ) == Catch::Approx( 0.5 ) );
+    REQUIRE( normalised_early_late( 1.0, 3.0 ) == Catch::Approx( -0.5 ) );
+    // Bounded in [-1, 1] at the extremes.
+    REQUIRE( normalised_early_late( 1.0, 0.0 ) == Catch::Approx( 1.0 ).margin( 1e-9 ) );
+    REQUIRE( normalised_early_late( 0.0, 1.0 ) == Catch::Approx( -1.0 ).margin( 1e-9 ) );
+    // No signal -> guarded to 0 (no divide-by-zero).
+    REQUIRE( normalised_early_late( 0.0, 0.0 ) == Catch::Approx( 0.0 ) );
+}
+#endif
