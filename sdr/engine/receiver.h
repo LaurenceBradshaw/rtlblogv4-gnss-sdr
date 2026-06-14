@@ -10,6 +10,7 @@
 #include <vector>
 #include "acquisition_aiding.h"
 #include "channel.h"
+#include "fir_decimator.h"
 #include "iq_file_device.h" // Iq_sample_format
 #include "observation.h"
 #include "position.h"
@@ -27,10 +28,14 @@ struct Receiver_config
 {
     bool             use_rtlsdr     = false;
     std::string      file_path;                              // file source
-    uint32_t         sample_rate_hz = 2048000;
+    uint32_t         sample_rate_hz = 2048000;               // SOURCE (native) rate
     Iq_sample_format format         = Iq_sample_format::INT16; // file source
     int              device_index   = 0;                       // RTL-SDR
     double           gain_db        = -1.0;                    // RTL-SDR; <0 => hardware AGC
+    // FIR-decimate the source by this integer factor before processing (1 = none). The whole pipeline
+    // then runs at sample_rate_hz / decimation - cheaper, and lets a high-rate capture (e.g. 25 MHz)
+    // run near real time. The fractional rate that an indivisible factor leaves is harmless.
+    uint32_t         decimation     = 1;
 
     // Which signals to search, each with its own PRN allowlist (empty set = all PRNs in that signal's
     // range). Empty list -> default_signal_selection() (GPS L1 C/A + Galileo E1-B, all PRNs).
@@ -131,6 +136,7 @@ private:
 
     std::unique_ptr<Sample_buffer>        sample_buffer_;
     std::unique_ptr<Stream_device>        device_;
+    std::unique_ptr<Fir_decimator>        decimator_; // optional layer: device -> decimator -> buffer
     std::vector<std::unique_ptr<Signal>>  signals_;
     Acquisition_aiding                    aiding_;
     std::vector<std::unique_ptr<Channel>> channels_;

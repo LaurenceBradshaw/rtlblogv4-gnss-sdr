@@ -115,10 +115,15 @@ bool Acquisition_engine::integrate( const Sample_block& block )
         active_half_bins_                      = std::min( half, ( nfreq_ - 1 ) / 2 ); // <= allocated grid
     }
 
-    // FFT the raw block ONCE (carrier-free)
+    // FFT the raw block ONCE (carrier-free). Guard against a block shorter than m_ (zero-pad the tail)
+    // so a sizing mismatch can never read out of bounds - the FFT tolerates a few zero samples.
+    const size_t avail = block.len1 + block.len2;
     for( int i = 0; i < m_; i++ )
     {
-        data_fft_[i] = ( static_cast<size_t>( i ) < block.len1 ) ? block.ptr1[i] : block.ptr2[i - block.len1];
+        const size_t ui = static_cast<size_t>( i );
+        data_fft_[i]    = ui >= avail            ? Complex_sample( 0.0f, 0.0f )
+                          : ui < block.len1      ? block.ptr1[i]
+                                                 : block.ptr2[ui - block.len1];
     }
     auto* fd = reinterpret_cast<fftwf_complex*>( data_fft_.data() );
     fftwf_execute_dft( fft_plan_, fd, fd );

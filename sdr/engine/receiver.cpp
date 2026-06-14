@@ -90,7 +90,13 @@ void Receiver::setup()
     pos_solver_ = Position_solver {};
     clear_published_state(); // a fresh run starts from a clean GUI state (drops any frozen EOF state)
 
-    const uint32_t sample_rate_hz = config_.sample_rate_hz;
+    // The SOURCE runs at config_.sample_rate_hz; the rest of the pipeline runs at the (optionally
+    // decimated) PROCESSING rate. The Fir_decimator sits in the streaming callback (device -> decimator
+    // -> buffer), so the buffer, channels, scheduler and timing all use the processing rate.
+    const uint32_t decim         = std::max( 1u, config_.decimation );
+    const uint32_t native_rate   = config_.sample_rate_hz;
+    const uint32_t sample_rate_hz = native_rate / decim; // processing rate
+    decimator_                    = decim > 1 ? std::make_unique<Fir_decimator>( static_cast<int>( decim ) ) : nullptr;
 
     // Buffer must hold at least 2 s of samples so that push()'s 1 s sleep
     // (see sample_buffer.cpp) always wakes up to find meaningful space freed.
@@ -102,7 +108,7 @@ void Receiver::setup()
     if( config_.use_rtlsdr )
     {
         auto rtl = std::make_unique<Rtlsdr_device>( config_.device_index );
-        rtl->set_sample_rate_hz( sample_rate_hz );
+        rtl->set_sample_rate_hz( native_rate );
         rtl->set_centre_freq_hz( GNSS_L1_HZ );
         if( config_.gain_db >= 0.0 )
         {
@@ -117,7 +123,7 @@ void Receiver::setup()
     }
     else
     {
-        device_     = std::make_unique<Iq_file_device>( config_.file_path, sample_rate_hz, config_.format );
+        device_     = std::make_unique<Iq_file_device>( config_.file_path, native_rate, config_.format );
         source_desc = config_.file_path;
     }
 
@@ -155,10 +161,13 @@ void Receiver::setup()
             "{}{}:{}({} PRNs)", sig_list.empty() ? "" : ", ", signal_token( s.id ), signal_name( s.id ), prns
         );
     }
+    const std::string rate_desc = decim > 1
+                                      ? fmt::format( "{} Hz (decimated /{} from {} Hz)", sample_rate_hz, decim, native_rate )
+                                      : fmt::format( "{} Hz", sample_rate_hz );
     logging::log(
         logging::Level::Info,
         fmt::format(
-            "Streaming {} at {} Hz - signals [{}] - launching {} channels", source_desc, sample_rate_hz, sig_list, channels_.size()
+            "Streaming {} at {} - signals [{}] - launching {} channels", source_desc, rate_desc, sig_list, channels_.size()
         )
     );
 
@@ -184,6 +193,7 @@ void Receiver::teardown()
     {
         device_->stop_streaming();
     }
+    decimator_.reset(); // safe now: the streaming thread (its only user) has stopped
     scheduler_.reset();
     pool_.reset();
     channels_.clear();
@@ -202,7 +212,11 @@ void Receiver::run()
         return;
     }
 
-    const double sample_rate_hz = static_cast<double>( config_.sample_rate_hz );
+    // The buffer + channels run at the PROCESSING rate (after any decimation); the device still streams
+    // at the native rate. So sample-index -> time uses the processing rate, but the device's consumed
+    // count (native samples) divides by the native rate to give wall seconds.
+    const double native_rate_hz   = static_cast<double>( config_.sample_rate_hz );
+    const double sample_rate_hz   = native_rate_hz / std::max( 1u, config_.decimation );
 
     constexpr auto TICK_INTERVAL = std::chrono::milliseconds( 100 );
     constexpr int  LOG_EVERY_N   = 10;
@@ -213,7 +227,17 @@ void Receiver::run()
     // point, so channel_s (derived from elapsed_samples) never exceeds wall_s.
     const auto wall_start = std::chrono::steady_clock::now();
 
-    device_->start_streaming( [this]( const Complex_buf& samples ) { sample_buffer_->push( samples ); } );
+    // Decimator layer (if enabled) sits here, between the source and the buffer: device -> decimator -> buffer.
+    device_->start_streaming( [this]( const Complex_buf& samples ) {
+        if( decimator_ )
+        {
+            sample_buffer_->push( decimator_->process( samples ) );
+        }
+        else
+        {
+            sample_buffer_->push( samples );
+        }
+    } );
 
     std::optional<Position_solution> current_position = std::nullopt;
     int                              tick             = 0;
@@ -236,8 +260,8 @@ void Receiver::run()
         // processed position (what is actually correlated).
         const Receiver_status status {
             std::chrono::duration<double>( std::chrono::steady_clock::now() - wall_start ).count(),
-            static_cast<double>( device_->samples_consumed() ) / sample_rate_hz,
-            static_cast<double>( scheduler_->min_next_sample() ) / sample_rate_hz,
+            static_cast<double>( device_->samples_consumed() ) / native_rate_hz, // source (native) seconds streamed
+            static_cast<double>( scheduler_->min_next_sample() ) / sample_rate_hz, // channel position (processing rate)
         };
 
         // Publish a coherent copy of the GUI-visible state (PVT + per-channel snapshots + status) under

@@ -43,6 +43,10 @@ int main( int argc, char** argv )
           cxxopts::value<double>()->default_value( "-1" ) )
         ( "gui",         "Launch the graphical interface (requires a GUI build)",
           cxxopts::value<bool>()->default_value( "false" ) )
+        ( "decimate",    "FIR-decimate the source by this integer factor before processing (1 = none). "
+                         "Processing rate becomes sample-rate/factor. e.g. a 25 MHz capture with "
+                         "--decimate 12 runs at ~2.083 MHz",
+          cxxopts::value<uint32_t>()->default_value( "1" ) )
         ( "signal",      "Signal to search, repeatable: CONSTELLATION[:COMPONENT], where "
                          "CONSTELLATION=gps|galileo|beidou and COMPONENT=l1ca|e1b|b1i. Omit the component "
                          "to search ALL of that constellation's components. e.g. --signal gps:l1ca "
@@ -67,6 +71,7 @@ int main( int argc, char** argv )
     config.sample_rate_hz = result["sample-rate"].as<uint32_t>();
     config.device_index   = result["device"].as<int>();
     config.gain_db        = result["gain"].as<double>();
+    config.decimation     = std::max( 1u, result["decimate"].as<uint32_t>() );
 
     if( !config.use_rtlsdr && !result.count( "file" ) )
     {

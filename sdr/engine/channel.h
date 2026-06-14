@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include "acquisition.h"
@@ -169,10 +170,14 @@ private:
 
     const double current_transmission_time_s() const;
     // Acquisition block = one FFT window (acq_fft_factor * one code period); must match
-    // Acquisition_engine::m_ so integrate() has exactly the samples its FFT consumes.
+    // Acquisition_engine::m_ so integrate() has exactly the samples its FFT consumes. ROUND (not
+    // truncate) the samples-per-period: the code replica is round(rate*period) samples, so at a
+    // fractional sample rate (e.g. 4.166 MHz from --decimate 6) truncating here left the block one row
+    // short and integrate() read past it -> segfault.
     size_t acq_block() const
     {
-        return static_cast<size_t>( signal_.params().acq_fft_factor ) * static_cast<size_t>( EPOCH_SAMPLES );
+        return static_cast<size_t>( signal_.params().acq_fft_factor )
+             * static_cast<size_t>( std::llround( EPOCH_SAMPLES ) );
     }
 
     const Signal&                signal_;
