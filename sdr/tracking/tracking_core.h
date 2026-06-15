@@ -33,28 +33,35 @@ public:
     // energy must exceed this (see advance_secondary_sync). Below the old coherent 0.5 because
     // the differential product squares the noise.
     static constexpr double SECONDARY_SYNC_RATIO = 0.35;
+    // Secondary-sync VERIFICATION (fixes the intermittent Galileo medium-C/N0 false sync). A correct
+    // secondary phase lets the pure PLL clean the pilot so cos(2*phi) climbs above SECONDARY_SYNC_MIN_LOCK
+    // within ~SECONDARY_SYNC_VERIFY_EPOCHS; a FALSE sync (picked at ~30-35 dB-Hz) leaves it stuck low. If
+    // it hasn't cleaned up by then, drop the sync and re-search (a fresh window may catch the true phase).
+    // 0.35 cleanly separates a false sync (cos(2*phi) stuck ~0.12) from a correct one (climbs to 0.6-0.99),
+    // with margin so a correct-but-noisy lock's transient dips don't trigger a spurious re-search.
+    static constexpr double SECONDARY_SYNC_MIN_LOCK      = 0.35; // "cleaned up" cos(2*phi) bar
+    static constexpr int    SECONDARY_SYNC_VERIFY_EPOCHS = 1000; // grace after sync before declaring it false
+    // Fast degradation check: if the carrier was ALREADY cleanly locked when the secondary synced
+    // (cos(2*phi) > _WAS_CLEAN) but the sync then COLLAPSED it by more than _DEGRADE, that sync broke a
+    // good lock - drop it quickly (don't wait the full grace). GPS L1C's clean Costas lock (~0.95) doesn't
+    // need its long 1800-chip overlay, which false-syncs and scrambles the pilot; a correct Galileo CS25
+    // sync, by contrast, leaves a clean lock clean. (For a DIRTY pre-sync lock the slow check above applies.)
+    static constexpr double SECONDARY_SYNC_WAS_CLEAN   = 0.85;
+    static constexpr double SECONDARY_SYNC_DEGRADE     = 0.40;
+    static constexpr int    SECONDARY_SYNC_FAST_EPOCHS = 50;
 
-    // Loop-filter noise bandwidths.
-    //
-    // NOTE: GNSS-SDRLIB's rtlsdr_L1.ini uses FLL_BW1=200/FLL_BW2=50, but a 200 Hz
-    // FLL overshoots and drives a ~90 Hz limit cycle on this 4 MHz capture - the
-    // carrier never cleanly phase-locks, so bit-sync sees a flat vote histogram.
-    // The GNSS-SDR config shipped WITH this file uses fll_bw_hz=10 / pll_bw_hz=50 /
-    // dll_bw_hz=4, so bring the FLL into line with that known-good reference.
-    // 3rd-order FLL-assisted PLL (see pll_update). The PLL does the heavy lifting;
-    // the FLL is a gentle frequency assist (GNSS-SDR uses fll_bw_hz=10 for this file).
-    // prm1: before nav frame sync (pull-in)   prm2: after nav frame sync
-    static constexpr double DLL_BW1 = 4.0, PLL_BW1 = 40.0, FLL_BW1 = 25.0;
-    static constexpr double DLL_BW2 = 2.0, PLL_BW2 = 25.0, FLL_BW2 = 10.0;
-
-    // Galileo E1 (atan-FLL channel) bandwidths, following GNSS-SDRLIB's E1 config: a
-    // high-FLL pull-in set (prm1) used until the pilot secondary code syncs (= locked),
-    // then a tight steady-state set (prm2). The atan(I/Q) FLL is data/secondary-insensitive
-    // so the strong FLL is usable. Used when fll_active_ is false (1 symbol per epoch).
-    // prm1 = Costas+FLL pull-in (until the CS25 secondary syncs); prm2 = pure-PLL steady
-    // state on the data-free pilot (GNSS-SDR Galileo_E1 DLL_PLL VEML: pll_bw 20, dll_bw 3).
-    static constexpr double E1_DLL_BW1 = 5.0, E1_PLL_BW1 = 30.0, E1_FLL_BW1 = 200.0;
-    static constexpr double E1_DLL_BW2 = 3.0, E1_PLL_BW2 = 20.0, E1_FLL_BW2 = 50.0;
+    // Loop-filter noise bandwidths now live on each Signal (Signal_params::loop_bw_wide/narrow),
+    // read by the Tracking_core ctor -> make_prm. Per-signal because the right values depend on the
+    // integration period: the wide FLL that pulls Galileo's 4 ms epoch in is unstable on L1C's 10 ms.
+    // (GPS L1 C/A and BeiDou B1I use the cross/dot-FLL set; Galileo E1 and GPS L1C the atan-FLL set -
+    // selected by fll_active_, which now only picks the FLL discriminator, not the bandwidths.)
+    // Extended coherent integration (pilot, once cleanly secondary-locked): coherently sum the
+    // secondary-wiped correlators over EXTEND_SYMBOLS epochs, then run the loop once per window. The
+    // ~10*log10(N) dB SNR boost steadies the medium-C/N0 lock that otherwise churns / false-syncs. Mirrors
+    // gnss-sdr Galileo E1 (extend_correlation_symbols). We keep the prm2 bandwidth (not gnss-sdr's narrower
+    // pll_bw_narrow): the SNR boost cleans the lock while the tighter loop keeps the per-epoch phase (hence
+    // the cos(2*phi) lock test, and the PVT lock gate) above threshold - a narrow loop loosened it below.
+    static constexpr int EXTEND_SYMBOLS = 2; // epochs per extended window (Galileo 4 ms -> 8 ms)
 
     // Lock detector. Two tests over a window of CN0_WINDOW_EPOCHS (both EMA-smoothed), combined with
     // hysteresis - the standard gnss-sdr scheme:
@@ -244,13 +251,16 @@ protected:
     int epoch_count_; // total epochs since initialise()
 
     // Secondary (overlay) code state - only used when secondary_ is non-empty (pilot).
-    std::vector<float> secondary_;          // overlay code chips (e.g. CS25), 1 per epoch
-    bool               secondary_sync_;     // phase acquired -> wipe-off active, FLL valid
-    int                secondary_index_;    // position in secondary_ for the next epoch
-    int                secondary_polarity_; // +/-1, resolved at sync (carrier sign)
-    std::vector<float> sec_i_hist_;         // recent prompt-I values (complex pair with sec_q_hist_)
+    std::vector<float> secondary_;             // overlay code chips (e.g. CS25), 1 per epoch
+    bool               secondary_sync_;        // phase acquired -> wipe-off active, FLL valid
+    int                secondary_index_;       // position in secondary_ for the next epoch
+    int                secondary_polarity_;    // +/-1, resolved at sync (carrier sign)
+    int                epoch_at_sync_   = 0;   // epoch_count_ when the secondary last synced (sync verify)
+    double             cos2phi_at_sync_ = 0.0; // carrier lock at sync time (fast degradation check)
+    std::vector<float> sec_i_hist_;            // recent prompt-I values (complex pair with sec_q_hist_)
     std::vector<float> sec_q_hist_;
 
-    Tracking_loop_prm prm1_; // loop params before nav frame sync
-    Tracking_loop_prm prm2_; // loop params after  nav frame sync
+    Tracking_loop_prm prm1_;          // loop params before nav frame sync
+    Tracking_loop_prm prm2_;          // loop params after  nav frame sync
+    int               ext_count_ = 0; // epochs accumulated in the current extended-integration window
 };

@@ -68,6 +68,12 @@ private:
     // Seed geometry gate: reject a seed whose position dilution of precision exceeds this, so the
     // filter is not locked onto a sparse, badly-conditioned fix (wait for more/better sats instead).
     static constexpr double MAX_SEED_PDOP = 6.0;
+    // Seed pseudorange RAIM: drop an SV from the seed least-squares if its post-fit range residual
+    // exceeds this (m). A healthy seed residual is metres-to-tens-of-metres (measurement noise +
+    // unmodelled iono/tropo); a cross-correlation / false-lock track is orders of magnitude larger and
+    // would otherwise drag the seed position hundreds of km off (PDOP doesn't catch it - geometry is
+    // fine, the measurement is not). Generous so a marginal-but-real SV is never dropped.
+    static constexpr double SEED_PR_RAIM_RESIDUAL_M = 10000.0;
 
     // --- tuning (process noise spectral densities + measurement noise) -------------------
     // Spatial: continuous white-noise-acceleration model. ACCEL_PSD is how hard the platform

@@ -119,6 +119,7 @@ std::vector<Signal_selection> default_signal_selection()
 std::vector<Signal_id> all_signals()
 {
     return { { Constellation::Gps, Band::L1, Code::CA },
+             { Constellation::Gps, Band::L1, Code::Cd }, // GPS L1C
              { Constellation::Galileo, Band::E1, Code::B },
              { Constellation::Beidou, Band::B1, Code::I } };
 }
@@ -173,14 +174,21 @@ Signal_id signal_from_tokens( const std::string& constellation, const std::strin
 
     if( s.empty() )
     {
-        return def; // default signal for the constellation
+        return def; // bare constellation -> its default signal (the .constellation is what callers use)
     }
-    // The named signal must belong to the constellation. (One signal each for now.)
-    if( ( con == Constellation::Gps && s == "l1ca" ) || ( con == Constellation::Galileo && s == "e1b" )
-        || ( con == Constellation::Beidou && s == "b1i" ) )
+    // Resolve the named component within the constellation.
+    if( con == Constellation::Gps )
     {
-        return def;
+        if( s == "l1ca" )
+            return { Constellation::Gps, Band::L1, Code::CA };
+        if( s == "l1c" )
+            return { Constellation::Gps, Band::L1, Code::Cd };
+        throw std::invalid_argument( "Unknown signal '" + signal + "' for gps (expected l1ca, l1c)" );
     }
+    if( con == Constellation::Galileo && s == "e1b" )
+        return def;
+    if( con == Constellation::Beidou && s == "b1i" )
+        return def;
     throw std::invalid_argument( "Unknown signal '" + signal + "' for " + c + " (expected " + signal_name( def ) + ")" );
 }
 
@@ -201,13 +209,15 @@ const char* signal_token( const Signal_id& id )
 
 const char* signal_name( const Signal_id& id )
 {
-    switch( id.constellation )
+    switch( id.code ) // the component (a constellation can now have several)
     {
-    case Constellation::Gps:
+    case Code::CA:
         return "l1ca";
-    case Constellation::Galileo:
+    case Code::Cd:
+        return "l1c";
+    case Code::B:
         return "e1b";
-    case Constellation::Beidou:
+    case Code::I:
         return "b1i";
     default:
         return "?";
@@ -419,22 +429,24 @@ TEST_CASE( "parse_selection_components_and_per_constellation_prns", "[selection]
     REQUIRE( s[1].id == Signal_id { Constellation::Galileo, Band::E1, Code::B } );
     REQUIRE( s[1].prns == std::set<int> { 3, 11 } );
 
-    // Bare constellation -> ALL of its components (one each today) + no PRNs anywhere -> all PRNs.
+    // Bare constellation -> ALL of its components. GPS now has TWO (L1 C/A + L1C), so "gps galileo"
+    // expands to 3 selections; no PRNs anywhere -> all PRNs.
     const auto t = parse_selection( { "gps", "galileo" }, {} );
-    REQUIRE( t.size() == 2 );
+    REQUIRE( t.size() == 3 );
     REQUIRE( t[0].id == Signal_id { Constellation::Gps, Band::L1, Code::CA } );
-    REQUIRE( t[1].id == Signal_id { Constellation::Galileo, Band::E1, Code::B } );
+    REQUIRE( t[1].id == Signal_id { Constellation::Gps, Band::L1, Code::Cd } );
+    REQUIRE( t[2].id == Signal_id { Constellation::Galileo, Band::E1, Code::B } );
     REQUIRE( t[0].prns.empty() );
-    REQUIRE( t[1].prns.empty() );
 
     // PRNs are per-CONSTELLATION: one --prns gps:... applies to ALL of gps's selected components.
-    // (Galileo gets all PRNs since none were given for it.)
-    const auto u = parse_selection( { "gps:l1ca", "galileo:e1b" }, { "gps:1,2,5-7" } );
-    REQUIRE( u[0].prns == std::set<int> { 1, 2, 5, 6, 7 } );
-    REQUIRE( u[1].prns.empty() );
+    const auto u = parse_selection( { "gps:l1ca", "gps:l1c", "galileo:e1b" }, { "gps:1,2,5-7" } );
+    REQUIRE( u.size() == 3 );
+    REQUIRE( u[0].prns == std::set<int> { 1, 2, 5, 6, 7 } ); // gps L1 C/A
+    REQUIRE( u[1].prns == std::set<int> { 1, 2, 5, 6, 7 } ); // gps L1C (same per-constellation set)
+    REQUIRE( u[2].prns.empty() );
 
-    // Duplicate component is de-duplicated.
-    REQUIRE( parse_selection( { "gps", "gps:l1ca" }, {} ).size() == 1 );
+    // Bare "gps" (=l1ca+l1c) + an explicit "gps:l1ca" de-dups to just the two GPS components.
+    REQUIRE( parse_selection( { "gps", "gps:l1ca" }, {} ).size() == 2 );
 
     // Open-ended PRN range resolves against the constellation's max (GPS = 32).
     const auto o = parse_selection( { "gps" }, { "gps:30-" } );

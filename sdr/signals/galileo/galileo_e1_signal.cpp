@@ -16,6 +16,8 @@ const Signal_params Galileo_e1_signal::params_ = {
     /* modulation        */ Modulation::Boc11,
     /* acq_integrations  */ 4, // 4 ms code -> ~6 dB/epoch, fewer epochs needed
     /* acq_fft_factor    */ 1, // single-period circular FFT (4x cheaper/call)
+    /* loop_bw_wide      */ { 5.0, 30.0, 200.0 }, // {dll,pll,fll} Costas+strong-FLL pull-in (atan FLL)
+    /* loop_bw_narrow    */ { 3.0, 20.0, 50.0 },  // tight pure-PLL steady state on the data-free pilot
     /* frame_sync_timeout_s */ 45.0, // I/NAV page-vote sync is slower (can take 30 s+); generous margin
 };
 
@@ -34,9 +36,9 @@ std::unique_ptr<Nav_decoder> Galileo_e1_signal::make_nav_decoder( Satellite_id s
     return std::make_unique<Galileo_e1b_decoder>( sv, params_ );
 }
 
-std::vector<float> Galileo_e1_signal::secondary_code() const
+std::vector<float> Galileo_e1_signal::secondary_code( Satellite_id /*sv*/ ) const
 {
-    return galileo::E1c_code::secondary_chips(); // CS25 (25 chips, 1 per 4 ms epoch)
+    return galileo::E1c_code::secondary_chips(); // CS25 (25 chips, 1 per 4 ms epoch) - same for all SVs
 }
 
 std::vector<float> Galileo_e1_signal::data_code_chips( Satellite_id sv ) const
@@ -47,6 +49,6 @@ std::vector<float> Galileo_e1_signal::data_code_chips( Satellite_id sv ) const
 std::unique_ptr<Tracker> Galileo_e1_signal::make_tracker( Satellite_id sv, double sample_rate_hz ) const
 {
     return std::make_unique<Pilot_tracker>(
-        code_chips( sv ), sample_rate_hz, params_, secondary_code(), data_code_chips( sv )
+        code_chips( sv ), sample_rate_hz, params_, secondary_code( sv ), data_code_chips( sv )
     );
 }

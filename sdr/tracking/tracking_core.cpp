@@ -53,19 +53,11 @@ Tracking_core::Tracking_core(
       secondary_index_( 0 ),
       secondary_polarity_( 1 )
 {
-    // Loop bandwidths per FLL discriminator type. GPS (cross/dot FLL) uses its tuned set;
-    // Galileo E1 (atan FLL, 1 symbol/epoch) uses the GNSS-SDRLIB E1 set (strong-FLL pull-in
-    // prm1, tight steady-state prm2). Both run at the actual code-period dt in run_loops.
-    if( fll_active_ )
-    {
-        prm1_ = make_prm( DLL_BW1, PLL_BW1, FLL_BW1 );
-        prm2_ = make_prm( DLL_BW2, PLL_BW2, FLL_BW2 );
-    }
-    else
-    {
-        prm1_ = make_prm( E1_DLL_BW1, E1_PLL_BW1, E1_FLL_BW1 );
-        prm2_ = make_prm( E1_DLL_BW2, E1_PLL_BW2, E1_FLL_BW2 );
-    }
+    // Loop bandwidths come from the Signal (Signal_params::loop_bw_wide/narrow): per-signal because
+    // the right values depend on the integration period and C/N0. wide = pull-in (prm1, pre frame
+    // sync); narrow = tight steady state (prm2, post sync). Both run at the actual code-period dt.
+    prm1_ = make_prm( sig.loop_bw_wide.dll, sig.loop_bw_wide.pll, sig.loop_bw_wide.fll );
+    prm2_ = make_prm( sig.loop_bw_narrow.dll, sig.loop_bw_narrow.pll, sig.loop_bw_narrow.fll );
 
     // E/L spacing in samples: target ~0.5 chip
     // mirrors sdrini.trkcorrp (default 1 sample for RTL-SDR at 2 MHz)

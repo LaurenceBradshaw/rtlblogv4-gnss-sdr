@@ -306,39 +306,103 @@ bool Position_solver::initialise( const std::vector<Satellite_measurement>& meas
         return false; // need >= 4 + (#non-reference constellations) sats to solve
     }
 
-    Eigen::VectorXd pr      = extract_vector( measurements, &Satellite_measurement::pseudorange_m );
-    Eigen::VectorXd prr     = extract_vector( measurements, &Satellite_measurement::pseudorange_rate_m_s );
-    Eigen::MatrixXd sat_pos = sat_matrix(
-        measurements,
-        &Satellite_measurement::satellite_pos_x,
-        &Satellite_measurement::satellite_pos_y,
-        &Satellite_measurement::satellite_pos_z
-    );
-    Eigen::MatrixXd sat_vel = sat_matrix(
-        measurements,
-        &Satellite_measurement::satellite_vel_x,
-        &Satellite_measurement::satellite_vel_y,
-        &Satellite_measurement::satellite_vel_z
-    );
-
-    std::vector<int> col( measurements.size() );
-    for( size_t i = 0; i < measurements.size(); ++i )
+    // Seed pseudorange RAIM. A gross outlier - e.g. a cross-correlation / false-preamble track whose
+    // garbage range would drag the seed hundreds of km off (seen on the Skydel sim, where one false-locked
+    // SV pushed the seed to |pos| ~8380 km) - is NOT caught by the PDOP gate (geometry is fine, the
+    // measurement is not) and then poisons the whole filter. We can't use the reference-anchored trick the
+    // velocity RAIM uses, because the bad SV may be IN the reference constellation (the Galileo-only case).
+    // We also can't just drop the largest post-fit residual: a high-LEVERAGE outlier smears its error onto
+    // the inliers, so the biggest residual can land on a GOOD SV. So use LEAVE-ONE-OUT: while the fit's max
+    // residual is grossly large, drop the SV whose REMOVAL most reduces that max - which cleanly identifies
+    // a single outlier regardless of leverage - and re-fit. A drop is allowed only while it leaves >= nstate
+    // measurements AND keeps every present constellation with a satellite (nstate / ls_col are fixed from the
+    // full set, so the reference gauge + each inter-system-bias column stay observable). A coordinated
+    // CLUSTER of outliers could still fool this, but the PDOP gate + the EKF innovation gate guard that.
+    auto fit = [&]( const std::vector<Satellite_measurement>& w, Eigen::VectorXd* pos_out,
+                    Eigen::MatrixXd* sat_pos_out, std::vector<int>* col_out ) -> double
     {
-        col[i] = ls_col[static_cast<int>( measurements[i].constellation )];
-    }
+        Eigen::MatrixXd sp = sat_matrix(
+            w,
+            &Satellite_measurement::satellite_pos_x,
+            &Satellite_measurement::satellite_pos_y,
+            &Satellite_measurement::satellite_pos_z
+        );
+        Eigen::VectorXd  pr = extract_vector( w, &Satellite_measurement::pseudorange_m );
+        std::vector<int> c( w.size() );
+        for( size_t i = 0; i < w.size(); ++i )
+        {
+            c[i] = ls_col[static_cast<int>( w[i].constellation )];
+        }
+        Eigen::VectorXd p = least_squares(
+            Eigen::VectorXd::Zero( nstate ),
+            [&]( const Eigen::VectorXd& x ) { return pr_residuals_isb( x, sp, pr, c ); },
+            [&]( const Eigen::VectorXd& x ) { return jacobian_isb( x, sp, c, nstate ); },
+            50,
+            1e-6
+        );
+        if( p.hasNaN() )
+        {
+            return -1.0;
+        }
+        const Eigen::VectorXd r  = pr_residuals_isb( p, sp, pr, c );
+        double                mx = 0.0;
+        for( int i = 0; i < r.size(); ++i )
+        {
+            mx = std::max( mx, std::abs( r( i ) ) );
+        }
+        if( pos_out )
+            *pos_out = p;
+        if( sat_pos_out )
+            *sat_pos_out = sp;
+        if( col_out )
+            *col_out = c;
+        return mx;
+    };
 
-    // Mixed position + clock + inter-system-bias LS (start from the Earth's centre).
-    Eigen::VectorXd pos = least_squares(
-        Eigen::VectorXd::Zero( nstate ),
-        [&]( const Eigen::VectorXd& x ) { return pr_residuals_isb( x, sat_pos, pr, col ); },
-        [&]( const Eigen::VectorXd& x ) { return jacobian_isb( x, sat_pos, col, nstate ); },
-        50,
-        1e-6
-    );
-
-    if( pos.hasNaN() )
+    std::vector<Satellite_measurement> work = measurements;
+    Eigen::VectorXd                    pos;
+    Eigen::MatrixXd                    sat_pos;
+    std::vector<int>                   col;
+    for( ;; )
     {
-        return false;
+        const double mx = fit( work, &pos, &sat_pos, &col );
+        if( mx < 0.0 )
+        {
+            return false; // diverged
+        }
+        if( mx <= SEED_PR_RAIM_RESIDUAL_M || static_cast<int>( work.size() ) <= nstate )
+        {
+            break; // good fit, or can't drop any more
+        }
+
+        int cc[NUM_CONSTELLATIONS] = { 0 };
+        for( const auto& m : work )
+        {
+            cc[static_cast<int>( m.constellation )]++;
+        }
+
+        int    best_i   = -1;
+        double best_max = mx; // a removal must strictly improve the max residual
+        for( int i = 0; i < static_cast<int>( work.size() ); ++i )
+        {
+            if( cc[static_cast<int>( work[i].constellation )] < 2 )
+            {
+                continue; // keep every present constellation populated
+            }
+            std::vector<Satellite_measurement> trial = work;
+            trial.erase( trial.begin() + i );
+            const double m2 = fit( trial, nullptr, nullptr, nullptr );
+            if( m2 >= 0.0 && m2 < best_max )
+            {
+                best_max = m2;
+                best_i   = i;
+            }
+        }
+        if( best_i < 0 )
+        {
+            break; // no single removal helps - leave it to the PDOP / innovation gates
+        }
+        work.erase( work.begin() + best_i );
     }
 
     // Geometry gate: reject a poorly-determined (high-PDOP) seed - e.g. a sparse single-
@@ -357,11 +421,18 @@ bool Position_solver::initialise( const std::vector<Satellite_measurement>& meas
     // Velocity + clock-drift via robust (RAIM) LS - the clock drift is shared (one oscillator), so
     // there is no per-constellation drift term. RAIM anchors on the reference constellation and drops
     // SVs whose Doppler disagrees, so a biased-Doppler SV can't corrupt the velocity seed (which the
-    // EKF would otherwise lock onto).
-    std::vector<bool> is_ref( measurements.size() );
-    for( size_t i = 0; i < measurements.size(); ++i )
+    // EKF would otherwise lock onto). Built from the SAME inlier set the position RAIM accepted.
+    Eigen::MatrixXd sat_vel = sat_matrix(
+        work,
+        &Satellite_measurement::satellite_vel_x,
+        &Satellite_measurement::satellite_vel_y,
+        &Satellite_measurement::satellite_vel_z
+    );
+    Eigen::VectorXd   prr = extract_vector( work, &Satellite_measurement::pseudorange_rate_m_s );
+    std::vector<bool> is_ref( work.size() );
+    for( size_t i = 0; i < work.size(); ++i )
     {
-        is_ref[i] = ( measurements[i].constellation == reference_ );
+        is_ref[i] = ( work[i].constellation == reference_ );
     }
 
     Eigen::VectorXd vel;
@@ -764,5 +835,55 @@ TEST_CASE( "ekf_converges_to_known_truth", "[pvt][position][ekf]" )
     REQUIRE( sol.ecef_y_m_s == Catch::Approx( 0.0 ).margin( 1e-2 ) );
     REQUIRE( sol.ecef_z_m_s == Catch::Approx( 0.0 ).margin( 1e-2 ) );
     REQUIRE( sol.clock_drift_m_s == Catch::Approx( cd_truth ).margin( 1e-2 ) );
+}
+
+TEST_CASE( "seed_position_raim_rejects_gross_outlier", "[pvt][position][raim]" )
+{
+    // Six clean GPS SVs (good geometry) consistent with a known rx position + clock, PLUS one false-lock
+    // SV whose pseudorange is grossly wrong (off by 5000 km). Without seed RAIM the single outlier drags
+    // the least-squares seed hundreds of km off (the Skydel Galileo-alone failure); with the largest-
+    // residual RAIM in initialise() the outlier is dropped and the seed recovers truth from the 6 good SVs.
+    const double lat = 60.18 * DEG, lon = 24.83 * DEG, alt = 47.0; // ~Helsinki (the Skydel truth)
+    const Ecef   user     = geodetic_to_ecef( lat, lon, alt );
+    const double cb_truth = 8000.0;
+
+    struct
+    {
+        double az_deg, el_deg;
+    } look[] = { { 30, 72 }, { 95, 18 }, { 150, 45 }, { 210, 28 }, { 275, 61 }, { 340, 35 }, { 60, 15 } };
+
+    std::vector<Satellite_measurement> meas;
+    for( int i = 0; i < 7; ++i )
+    {
+        const Ecef   s   = sat_from_look( user, lat, lon, look[i].az_deg * DEG, look[i].el_deg * DEG, 22.0e6 );
+        const double rng = std::sqrt(
+            ( s.x - user.x ) * ( s.x - user.x ) + ( s.y - user.y ) * ( s.y - user.y )
+            + ( s.z - user.z ) * ( s.z - user.z )
+        );
+        Satellite_measurement m {};
+        m.satellite_id         = static_cast<Satellite_id>( i + 1 );
+        m.constellation        = Constellation::Gps;
+        m.satellite_pos_x      = s.x;
+        m.satellite_pos_y      = s.y;
+        m.satellite_pos_z      = s.z;
+        m.pseudorange_m        = rng + cb_truth;
+        m.pseudorange_rate_m_s = 0.0; // static rx + static sats + zero clock drift
+        m.elevation_rad        = look[i].el_deg * DEG;
+        meas.push_back( m );
+    }
+    // One SV is a gross outlier (cross-correlation / false-preamble track): pseudorange off by 5000 km.
+    meas[3].pseudorange_m += 5.0e6;
+
+    Position_solver solver;
+    const auto      out = solver.compute_solution( meas, 0.0 ); // seeds on the first call
+
+    REQUIRE( out.has_value() ); // still seeds: RAIM drops the outlier, 6 clean SVs keep good geometry
+    REQUIRE( out->valid );
+    // Truth recovered to within a metre -> the 5000 km outlier was rejected (had it stayed in the LS the
+    // seed would be hundreds of km off). The remaining 6 SVs are noise-free so the fit is essentially exact.
+    REQUIRE( out->ecef_x_m == Catch::Approx( user.x ).margin( 1.0 ) );
+    REQUIRE( out->ecef_y_m == Catch::Approx( user.y ).margin( 1.0 ) );
+    REQUIRE( out->ecef_z_m == Catch::Approx( user.z ).margin( 1.0 ) );
+    REQUIRE( out->clock_bias_m == Catch::Approx( cb_truth ).margin( 1.0 ) );
 }
 #endif

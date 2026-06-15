@@ -43,9 +43,10 @@ enum class Band
 //   I  - BeiDou B1I (in-phase)
 enum class Code
 {
-    CA,
-    B,
-    I
+    CA, // GPS L1 C/A
+    B,  // Galileo E1-B (I/NAV data; paired with E1-C pilot)
+    I,  // BeiDou B1I
+    Cd  // GPS L1Cd (CNAV-2 data; paired with the L1Cp pilot)
 };
 
 // Spreading-symbol modulation. Determines how the code generator lays out chips and
@@ -60,9 +61,19 @@ enum class Modulation
     Boc11
 };
 
+// Tracking-loop noise bandwidths (Hz) used to derive the filter coefficients
+// (Tracking_core::make_prm). Per signal because the right values depend on the
+// integration period (code_period_s) and C/N0: e.g. the wide FLL that pulls Galileo's
+// 4 ms epoch in is unstable (B*T too high) on GPS L1C's 10 ms epoch.
+struct Loop_bw
+{
+    double dll; // code (DLL) noise bandwidth
+    double pll; // carrier phase (PLL) noise bandwidth
+    double fll; // carrier frequency (FLL) noise bandwidth
+};
+
 // Fundamental, PRN-independent physics of a signal. Drives acquisition/tracking
-// sizing and the carrier/code NCOs. Loop-filter *tuning* (bandwidths, acquisition
-// thresholds) deliberately stays in the engines for now - only the physics is here.
+// sizing and the carrier/code NCOs.
 struct Signal_params
 {
     Constellation constellation;
@@ -86,6 +97,11 @@ struct Signal_params
     //     - fine for a strong, long (4 ms) code where each epoch has ample margin).
     int acq_integrations;
     int acq_fft_factor;
+
+    // Carrier/code loop bandwidths. "wide" is the pull-in set (prm1, before nav frame sync);
+    // "narrow" is the tighter steady-state set (prm2, after sync). See Loop_bw.
+    Loop_bw loop_bw_wide;
+    Loop_bw loop_bw_narrow;
 
     // Frame-sync timeout (s): if a channel tracks this long without achieving nav frame sync
     // (Nav_decoder::frame_synced), it locked onto a false / cross-correlation peak and is dropped
@@ -121,9 +137,10 @@ public:
 
     // Secondary (overlay) code: one chip per primary-code period, deterministic and
     // known. Tracking syncs to it then wipes it off, which lets the FLL work and
-    // coherent integration extend across epochs. Empty for signals without one (GPS,
-    // BeiDou B1I, Galileo E1-B data); Galileo E1-C pilot returns the 25-chip CS25.
-    virtual std::vector<float> secondary_code() const
+    // coherent integration extend across epochs. Empty for signals without one (GPS L1 C/A,
+    // BeiDou B1I, Galileo E1-B data). Per-SV: Galileo E1-C is the same CS25 for all PRNs, but
+    // GPS L1Cp's overlay differs per PRN - hence the sv argument (the default ignores it).
+    virtual std::vector<float> secondary_code( Satellite_id /*sv*/ ) const
     {
         return {};
     }

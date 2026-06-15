@@ -45,32 +45,76 @@ void Pilot_tracker::run_loops( bool /*bit_sync*/, bool /*sw_loop*/, Satellite_id
     bool                     use_fll  = true;
     bool                     pure_pll = false;
 
+    // Verify a completed sync: a CORRECT secondary phase lets the pure PLL clean the pilot, so cos(2*phi)
+    // climbs within a few seconds. A FALSE sync (picked at medium C/N0) leaves it stuck low forever. If it
+    // hasn't cleaned up after the grace window, drop the sync and re-search - this both kills the stuck
+    // "energy on Q" state and gives the SV more chances to sync on the right phase.
+    // Slow check: a dirty pre-sync lock that still hasn't cleaned up past the grace window was a false sync.
+    const bool slow_false = epoch_count_ - epoch_at_sync_ > SECONDARY_SYNC_VERIFY_EPOCHS
+                            && carrier_lock_test_ < SECONDARY_SYNC_MIN_LOCK;
+    // Fast check: the lock was clean BEFORE this sync but the sync COLLAPSED it - a false sync on a long/weak
+    // overlay (GPS L1C's 1800-chip overlay). Catch it quickly so the clean Costas lock isn't degraded for long.
+    const bool fast_broke = cos2phi_at_sync_ > SECONDARY_SYNC_WAS_CLEAN
+                            && epoch_count_ - epoch_at_sync_ > SECONDARY_SYNC_FAST_EPOCHS
+                            && carrier_lock_test_ < cos2phi_at_sync_ - SECONDARY_SYNC_DEGRADE;
+    if( secondary_sync_ && ( slow_false || fast_broke ) )
+    {
+        secondary_sync_ = false;
+        sec_i_hist_.clear();
+        sec_q_hist_.clear();
+        ext_count_ = 0;
+    }
+
     if( secondary_sync_ )
     {
         const float chip = secondary_[secondary_index_];
         polarity         = ( chip >= 0.0f ? 1 : -1 ) * secondary_polarity_;
         secondary_index_ = ( secondary_index_ + 1 ) % static_cast<int>( secondary_.size() );
-        prm              = &prm2_; // narrow, pure PLL
-        // Keep the FLL assisting the pure PLL: on the now data-free, secondary-wiped pilot the
-        // atan(I/Q) FLL gives a clean frequency error, and it holds lock through the residual
-        // frequency that a phase-only PLL can lose (the cause of the intermittent unlock seen
-        // on weaker SVs after secondary sync). FLL-assisted PLL is the standard robust choice.
-        use_fll  = true;
-        pure_pll = true;
+        cumsum_corr( polarity ); // accumulate the secondary-wiped correlators
+
+        if( carrier_lock_test_ > SECONDARY_SYNC_MIN_LOCK )
+        {
+            // EXTENDED coherent integration: the pilot is cleanly locked, so keep accumulating over
+            // EXTEND_SYMBOLS epochs and run a NARROW-bandwidth FLL-assisted pure PLL once per window.
+            // The coherent SNR boost steadies the medium-C/N0 lock that otherwise churns; the FLL nulls
+            // the small residual frequency that would otherwise rotate the held-NCO prompt within a window.
+            if( ++ext_count_ >= EXTEND_SYMBOLS )
+            {
+                const double dt = EXTEND_SYMBOLS * epoch_period_;
+                pll_update( prm2_, dt, /*use_fll=*/true, /*pure_pll=*/true );
+                dll_update( prm2_, dt );
+                clear_cumsum();
+                ext_count_ = 0;
+            }
+            // else: still filling the window - hold the NCO, update nothing this epoch.
+        }
+        else
+        {
+            // Just synced / still cleaning up: per-epoch FLL-assisted pure PLL pulls the pilot clean
+            // (FLL holds the residual frequency a phase-only PLL could lose), before extending.
+            ext_count_ = 0;
+            pll_update( prm2_, epoch_period_, /*use_fll=*/true, /*pure_pll=*/true );
+            dll_update( prm2_, epoch_period_ );
+            clear_cumsum();
+        }
     }
     else
     {
         advance_secondary_sync(); // uses this epoch's raw prompt (before cumsum below)
+        if( secondary_sync_ )
+        {
+            epoch_at_sync_     = epoch_count_;        // record when (re-)sync happened, for the verify above
+            cos2phi_at_sync_   = carrier_lock_test_;  // baseline lock for the degradation check above
+            ext_count_         = 0;
+        }
         // Grab frequency with the strong FLL (prm1) for ~0.8 s, then HOLD with the tighter
         // prm2 (Costas+FLL) so the prompt signs are clean enough for the secondary to sync.
         prm = ( epoch_count_ < 200 ) ? &prm1_ : &prm2_;
+        cumsum_corr( polarity );
+        pll_update( *prm, epoch_period_, use_fll, pure_pll );
+        dll_update( *prm, epoch_period_ );
+        clear_cumsum();
     }
-
-    cumsum_corr( polarity );
-
-    pll_update( *prm, epoch_period_, use_fll, pure_pll );
-    dll_update( *prm, epoch_period_ );
-    clear_cumsum();
 
     ++epoch_count_;
 }

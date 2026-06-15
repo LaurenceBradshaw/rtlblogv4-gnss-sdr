@@ -15,6 +15,8 @@ const Signal_params Beidou_b1i_signal::params_ = {
     /* modulation        */ Modulation::Bpsk,
     /* acq_integrations  */ 10,
     /* acq_fft_factor    */ 2,
+    /* loop_bw_wide      */ { 4.0, 40.0, 25.0 }, // {dll,pll,fll} pull-in (cross/dot FLL)
+    /* loop_bw_narrow    */ { 2.0, 25.0, 10.0 }, // steady state after frame sync
     /* frame_sync_timeout_s */ 30.0, // B1I D1 subframes (6 s) like GPS; no decoder yet, generous default
 };
 

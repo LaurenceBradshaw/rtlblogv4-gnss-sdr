@@ -428,6 +428,19 @@ bool Gps_l1ca_decoder::find_preamble()
         return false;
     }
 
+    // Cadence gate: once locked onto the preamble, a genuine TLM preamble recurs EXACTLY every 300 bits
+    // (one subframe), i.e. at nav_bit_count_ == 0. Reject a parity-passing match that lands OFF that
+    // boundary - it is a false preamble (the 8-bit pattern + 10 words happening to pass parity on
+    // misaligned bits). Such matches are rare on a clean capture but rampant on some sims (Skydel), and
+    // each decodes a garbage HOW TOW that re-bootstraps the TOW anchor, so tow_confirmed_ never latches
+    // and no ephemeris is ever published. The first preamble (preamble_found_ == false) bootstraps the
+    // cadence and is accepted at any phase; a missed (bit-errored) subframe is harmless - nav_bit_count_
+    // free-runs mod 300, so the next real preamble still lands at 0.
+    if( preamble_found_ && nav_bit_count_ != 0 )
+    {
+        return false;
+    }
+
     polarity_ = candidate_polarity;
 
     if( !preamble_found_ )
@@ -476,8 +489,15 @@ void Gps_l1ca_decoder::decode_subframe()
     // SF1 is captured on the first pass instead of being discarded (which cost a whole ~30 s frame
     // before the next SF1, dominating TTFF). The TOW check now only DROPS the corrupted-HOW glitch
     // (valid parity, garbage TOW); publishing eph_current_ -> eph_ is what waits for a trusted set.
-    // The TOW is the HOW count (bits 30..46) x 6 s.
-    const double     tow        = getbitu( bin, 30, 17 ) * 6.0;
+    // The TOW is the HOW count (bits 30..46) x 6 s. A valid TOW-count is 0..100799 (one week); an
+    // out-of-range count is an impossible time, so the subframe is corrupted / a false-preamble match -
+    // drop it WITHOUT touching the TOW anchor (belt-and-braces with the cadence gate in find_preamble).
+    const uint32_t tow_count = static_cast<uint32_t>( getbitu( bin, 30, 17 ) );
+    if( tow_count > 100799 )
+    {
+        return;
+    }
+    const double     tow        = tow_count * 6.0;
     const Tow_status tow_status = classify_tow( tow );
     if( tow_status == Tow_status::CorruptRejected )
     {
@@ -775,5 +795,52 @@ TEST_CASE( "gps_decode_real_subframes_prn1", "[gps][nav][ephemeris][cttc]" )
     const Ecef p = orbit::satellite_ecef_pos( e, e.toe, Constellation::Gps );
     const double r = std::sqrt( p.x * p.x + p.y * p.y + p.z * p.z );
     REQUIRE( r == Catch::Approx( 26.56e6 ).epsilon( 0.02 ) ); // a real orbit radius from decoded elements
+}
+
+TEST_CASE( "gps_how_tow_count_range_guard", "[gps][nav][tow]" )
+{
+    // decode_subframe() reads the HOW TOW-count from bits 30..46 (17 bits) of the packed subframe and
+    // drops the subframe if the count exceeds 100799 (an impossible time) - this is what stops a
+    // false-preamble's garbage HOW from poisoning the TOW anchor (the Skydel GPS-PVT fix). This test
+    // pins the field position, the physical cadence, and the threshold boundary - all on real data.
+    const auto sf1 = sf_from_hex( CTTC_PRN1_SF1 );
+    const auto sf2 = sf_from_hex( CTTC_PRN1_SF2 );
+    const auto sf3 = sf_from_hex( CTTC_PRN1_SF3 );
+
+    // (1) Real subframes carry a VALID TOW-count, so the guard never drops genuine data.
+    const uint32_t c1 = getbitu( sf1.data(), 30, 17 );
+    const uint32_t c2 = getbitu( sf2.data(), 30, 17 );
+    const uint32_t c3 = getbitu( sf3.data(), 30, 17 );
+    REQUIRE( c1 <= 100799u );
+    REQUIRE( c2 <= 100799u );
+    REQUIRE( c3 <= 100799u );
+
+    // (2) Physical truth (non-circular): the HOW TOW-count is in 6 s units and names the NEXT subframe,
+    // so three consecutive subframes increment by exactly 1. If the bit position were wrong this fails.
+    REQUIRE( c2 == c1 + 1 );
+    REQUIRE( c3 == c2 + 1 );
+
+    // (3) Threshold boundary. Set bits 30..46 (RTKLIB MSB-first, matching getbitu) to chosen counts and
+    // confirm the > 100799 guard fires exactly at 100800 (one full week of 6 s counts), not at 100799.
+    auto set_bits = []( uint8_t* buf, int pos, int len, uint32_t val ) {
+        for( int i = 0; i < len; ++i )
+        {
+            const int      bitpos = pos + i;
+            const uint32_t bit    = ( val >> ( len - 1 - i ) ) & 1u;
+            const uint8_t  mask   = static_cast<uint8_t>( 1u << ( 7 - bitpos % 8 ) );
+            if( bit )
+                buf[bitpos / 8] |= mask;
+            else
+                buf[bitpos / 8] = static_cast<uint8_t>( buf[bitpos / 8] & ~mask );
+        }
+    };
+    auto bad = sf_from_hex( CTTC_PRN1_SF1 );
+    set_bits( bad.data(), 30, 17, 100799u ); // max valid count -> accepted (NOT > 100799)
+    REQUIRE( getbitu( bad.data(), 30, 17 ) == 100799u );
+    REQUIRE_FALSE( getbitu( bad.data(), 30, 17 ) > 100799u );
+    set_bits( bad.data(), 30, 17, 100800u ); // first impossible count -> dropped
+    REQUIRE( getbitu( bad.data(), 30, 17 ) > 100799u );
+    set_bits( bad.data(), 30, 17, 0x1FFFFu ); // all-ones 17-bit field (a typical garbage decode)
+    REQUIRE( getbitu( bad.data(), 30, 17 ) > 100799u );
 }
 #endif
