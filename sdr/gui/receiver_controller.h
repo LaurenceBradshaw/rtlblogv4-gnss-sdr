@@ -2,6 +2,7 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include "receiver.h" // Source_params
 #include "signal_selection.h"
 
 class Receiver;
@@ -25,6 +26,9 @@ public:
     // Stage the signal selection for the next run (forwards to Receiver::set_signal_selection; the
     // receiver ignores it while running). Call before start().
     void apply_signal_selection( std::vector<Signal_selection> selection );
+
+    // Stage the source/run params (file vs RTL-SDR, format, rate, gain, decimation) for the next run.
+    void apply_source_params( Source_params params );
 
     bool is_running() const
     {

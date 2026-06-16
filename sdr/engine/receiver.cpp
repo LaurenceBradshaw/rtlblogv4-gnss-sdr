@@ -74,6 +74,21 @@ void Receiver::set_signal_selection( std::vector<Signal_selection> selection )
     enumerate_configured_sats();
 }
 
+void Receiver::set_source_params( Source_params params )
+{
+    if( running_.load() )
+    {
+        return; // takes effect only on the next run; ignore a change mid-run
+    }
+    config_.use_rtlsdr     = params.use_rtlsdr;
+    config_.file_path      = std::move( params.file_path );
+    config_.format         = params.format;
+    config_.sample_rate_hz = params.sample_rate_hz;
+    config_.device_index   = params.device_index;
+    config_.gain_db        = params.gain_db;
+    config_.decimation     = std::max( 1u, params.decimation );
+}
+
 Receiver::~Receiver() = default;
 
 void Receiver::setup()

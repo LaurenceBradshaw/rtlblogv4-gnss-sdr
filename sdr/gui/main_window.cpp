@@ -14,6 +14,7 @@
 #include "satellite_list_widget.h"
 #include "signals_widget.h"
 #include "sky_plot_widget.h"
+#include "source_widget.h"
 
 namespace
 {
@@ -49,6 +50,8 @@ Main_window::Main_window( const Receiver& receiver, Receiver_controller& control
     add_panel( new Pvt_widget );
     add_panel( new Satellite_list_widget( receiver ) );
     add_panel( new Sky_plot_widget );
+    source_panel_ = new Source_widget( receiver );
+    add_panel( source_panel_ );
     signals_panel_ = new Signals_widget( receiver );
     add_panel( signals_panel_ );
 
@@ -83,6 +86,12 @@ void Main_window::add_panel( Gui_panel* panel )
 
 void Main_window::on_start()
 {
+    // A missing file / bad sample rate aborts Start with an in-panel error instead of a half-built config.
+    if( !source_panel_->validate() )
+    {
+        tabs_->setCurrentWidget( source_panel_ );
+        return; // validate() already showed the error
+    }
     // A malformed PRN box aborts Start with an in-panel error instead of running a half-built config.
     if( !signals_panel_->validate() )
     {
@@ -96,6 +105,7 @@ void Main_window::on_start()
         signals_panel_->show_error( QStringLiteral( "Select at least one signal to search." ) );
         return;
     }
+    controller_.apply_source_params( source_panel_->source_params() );
     controller_.apply_signal_selection( sel );
     controller_.start();
 }
@@ -125,9 +135,11 @@ void Main_window::refresh()
     // Keep the buttons in step with the controller (which also flips back to stopped on its own when
     // an IQ file drains or the receiver errors out).
     const bool running = controller_.is_running();
-    start_button_->setEnabled( !running && signals_panel_->is_valid() ); // can't Start with a malformed PRN list
+    // Can't Start with a malformed PRN list or a missing file / bad sample rate.
+    start_button_->setEnabled( !running && signals_panel_->is_valid() && source_panel_->is_valid() );
     stop_button_->setEnabled( running );
     signals_panel_->set_editable( !running ); // the selection can only change between runs
+    source_panel_->set_editable( !running );  // the source/run params can only change between runs
 
     const Gui_frame frame = view_.poll();
     for( Gui_panel* panel : panels_ )

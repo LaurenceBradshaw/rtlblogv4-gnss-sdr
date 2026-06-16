@@ -9,6 +9,7 @@ class QLabel;
 class QPushButton;
 class Gui_panel;
 class Signals_widget;
+class Source_widget;
 class Receiver;
 class Receiver_controller;
 
@@ -30,6 +31,7 @@ private:
 
     Receiver_view        view_;
     Receiver_controller& controller_;
+    Source_widget*       source_panel_  = nullptr; // for staging the source/run params on Start
     Signals_widget*      signals_panel_ = nullptr; // for staging the selection on Start
 
     QTabWidget*             tabs_          = nullptr;

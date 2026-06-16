@@ -66,6 +66,8 @@ int main( int argc, char** argv )
         return 0;
     }
 
+    const bool gui = result["gui"].as<bool>();
+
     Receiver_config config;
     config.use_rtlsdr     = result["rtlsdr"].as<bool>();
     config.sample_rate_hz = result["sample-rate"].as<uint32_t>();
@@ -73,7 +75,8 @@ int main( int argc, char** argv )
     config.gain_db        = result["gain"].as<double>();
     config.decimation     = std::max( 1u, result["decimate"].as<uint32_t>() );
 
-    if( !config.use_rtlsdr && !result.count( "file" ) )
+    // The GUI's Source tab supplies the file / source params, so --file is optional under --gui.
+    if( !gui && !config.use_rtlsdr && !result.count( "file" ) )
     {
         logging::log( logging::Level::Error, "IQ file path is required (--file), or use --rtlsdr" );
         return 1;
@@ -81,7 +84,7 @@ int main( int argc, char** argv )
 
     try
     {
-        if( !config.use_rtlsdr )
+        if( !config.use_rtlsdr && result.count( "file" ) )
         {
             config.file_path = result["file"].as<std::string>();
             config.format    = parse_iq_format( result["format"].as<std::string>() );
@@ -97,7 +100,7 @@ int main( int argc, char** argv )
 
         Receiver receiver( std::move( config ) );
 
-        if( result["gui"].as<bool>() )
+        if( gui )
         {
 #ifdef SDR_GUI
             return Gui_app::run( receiver, argc, argv );

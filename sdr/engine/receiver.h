@@ -43,6 +43,20 @@ struct Receiver_config
     std::vector<Signal_selection> selected_signals;
 };
 
+// The source / run parameters the GUI's Source tab can change between runs (the Receiver_config source
+// fields, minus the signal selection which has its own setter). Applied via set_source_params(); takes
+// effect on the next run() like the signal selection.
+struct Source_params
+{
+    bool             use_rtlsdr     = false;
+    std::string      file_path;
+    Iq_sample_format format         = Iq_sample_format::INT16;
+    uint32_t         sample_rate_hz = 2048000; // SOURCE (native) rate
+    int              device_index   = 0;       // RTL-SDR
+    double           gain_db        = -1.0;    // RTL-SDR; <0 => hardware AGC
+    uint32_t         decimation     = 1;       // FIR-decimate the source by this factor (1 = none)
+};
+
 // Timing/progress of the processing loop, published for the GUI status bar. exec = wall-clock since
 // streaming started; stream = seconds of IQ pushed into the ring buffer (can outrun exec - disk beats
 // real time); channel = the slowest channel's processed position (what is actually correlated). When
@@ -107,6 +121,17 @@ public:
     // configured_satellites(). Only meaningful while stopped (the next run() rebuilds channels from it,
     // and the GUI reads configured_satellites() for its live pre-Start list); ignored while running.
     void set_signal_selection( std::vector<Signal_selection> selection );
+
+    // Current config - the GUI Source tab reads this to initialise its fields (so they reflect the CLI
+    // args / defaults). Available before Start (does not need the pipeline up).
+    const Receiver_config& config() const
+    {
+        return config_;
+    }
+    // Replace the source/run params (file vs RTL-SDR, file path, format, native rate, device, gain,
+    // decimation) for the NEXT run. Only meaningful while stopped; ignored mid-run, takes effect on the
+    // next setup(). The signal selection is set separately via set_signal_selection().
+    void set_source_params( Source_params params );
 
     // ---- Per-SV graph history (subscription model) ----
     // The GUI subscribes the SVs whose graph windows are open; the run loop publishes only those each

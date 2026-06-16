@@ -55,3 +55,8 @@ void Receiver_controller::apply_signal_selection( std::vector<Signal_selection> 
 {
     receiver_.set_signal_selection( std::move( selection ) );
 }
+
+void Receiver_controller::apply_source_params( Source_params params )
+{
+    receiver_.set_source_params( std::move( params ) );
+}
