@@ -147,6 +147,10 @@ void Receiver::setup()
             {
                 continue;
             }
+            if( !sig.broadcasts( static_cast<Satellite_id>( sv ) ) )
+            {
+                continue; // SV doesn't transmit this signal - don't waste a channel that can never lock
+            }
             channels_.push_back( std::make_unique<Channel>(
                 sig, static_cast<Satellite_id>( sv ), sample_rate_hz, *sample_buffer_, aiding_
             ) );

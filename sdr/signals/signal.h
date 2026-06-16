@@ -122,6 +122,17 @@ public:
     // Inclusive [min, max] SV/PRN ids this signal defines codes for.
     virtual std::pair<int, int> sv_range() const = 0;
 
+    // Whether SV `sv` actually BROADCASTS this signal, so the receiver only spins up a channel for one
+    // that can ever lock. Modern signals aren't on every SV (e.g. GPS L1C is GPS III/IIIF only), so a
+    // user may list any PRNs for convenience and we filter here. Default true (legacy signals are on all
+    // operational SVs). NOTE: a reliable per-SV capability source is the almanac/CNAV health (future);
+    // until then overrides should stay PERMISSIVE on simulated captures (the Skydel sim broadcasts L1C on
+    // all its present SVs, so a real-world "GPS III only" list would wrongly exclude the test SVs).
+    virtual bool broadcasts( Satellite_id /*sv*/ ) const
+    {
+        return true;
+    }
+
     // One sampled code period (Q = 0) at sample_rate_hz - the acquisition replica.
     virtual Complex_buf code_samples( Satellite_id sv, double sample_rate_hz ) const = 0;
 

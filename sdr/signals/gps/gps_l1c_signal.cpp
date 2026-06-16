@@ -22,7 +22,9 @@ const Signal_params Gps_l1c_signal::params_ = {
     // the time, deterministically, cos2phi ~0.92-0.97. The lower narrow set tightens the steady lock.
     /* loop_bw_wide      */ { 3.0, 25.0, 100.0 }, // {dll,pll,fll} pull-in (atan FLL)
     /* loop_bw_narrow    */ { 1.5, 12.0, 20.0 },  // steady state
-    /* frame_sync_timeout_s */ 600.0, // no CNAV-2 decode yet -> never frame-syncs; don't drop the channel
+    /* frame_sync_timeout_s */ 60.0, // CNAV-2 frame sync lands by ~37 s (1852-symbol window + alignment);
+                                      // generous margin so a real lock is kept while a false lock (no frame
+                                      // sync) is evicted to re-acquire - the standard cross-corr band-aid.
 };
 
 Complex_buf Gps_l1c_signal::code_samples( Satellite_id sv, double sample_rate_hz ) const

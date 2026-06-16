@@ -549,24 +549,32 @@ Tracking_output Tracking_core::correlate_epoch( const Sample_block& block )
     update_lock_detectors( II_[0], QQ_[0] );
 
     double cur_I, prev_I;
-    if( has_data_ )
+    if( has_data_ && secondary_sync_ )
     {
-        // Pilot-aided data demodulation. The data-component prompt and the pilot share the
-        // carrier, so the nav symbol is the data prompt PROJECTED onto the pilot's phasor:
+        // Pilot-aided data demodulation, pilot SECONDARY SYNCED. The data-component prompt and the pilot
+        // share the carrier, so the nav symbol is the data prompt PROJECTED onto the pilot's phasor:
         //   symbol = (data . pilot) / |pilot|.
-        // This recovers the symbol regardless of which axis the carrier loop settles on (and
-        // tracks residual phase wander), unlike reading a fixed I or Q - which silently
-        // returned noise whenever the pure PLL locked the pilot to I instead of Q. The pilot's
-        // per-epoch CS25 chip is divided out so it doesn't flip the symbol; the constant
-        // E1-B/E1-C sign is left for the nav decoder's preamble-polarity resolution.
-        // (mirrors GNSS-SDR's pilot-referenced data prompt; the projection is rotation-invariant,
-        // so it is unaffected by the signal-in-Q -> signal-in-I wipe flip.)
-        const double cs25 =
-            ( secondary_sync_ && !secondary_.empty() ) ? ( secondary_[secondary_index_] >= 0.0f ? 1.0 : -1.0 ) : 1.0;
+        // This recovers the symbol regardless of which axis the carrier loop settles on (and tracks
+        // residual phase wander), unlike reading a fixed I or Q. The pilot's per-epoch secondary chip is
+        // divided out so it doesn't flip the symbol; the constant E1-B/E1-C sign is left for the nav
+        // decoder's preamble-polarity resolution. (mirrors GNSS-SDR's pilot-referenced data prompt.)
+        const double cs25 = !secondary_.empty() ? ( secondary_[secondary_index_] >= 0.0f ? 1.0 : -1.0 ) : 1.0;
         const double mag  = std::sqrt( II_[0] * II_[0] + QQ_[0] * QQ_[0] ) + 1e-12;
         const double omag = std::sqrt( old_I_[0] * old_I_[0] + old_Q_[0] * old_Q_[0] ) + 1e-12;
         cur_I             = cs25 * ( data_prompt_i_ * II_[0] + data_prompt_q_ * QQ_[0] ) / mag;
         prev_I            = cs25 * ( old_data_prompt_i_ * old_I_[0] + old_data_prompt_q_ * old_Q_[0] ) / omag;
+    }
+    else if( has_data_ )
+    {
+        // Pilot tracking but the secondary is NOT synced - e.g. GPS L1C, whose 1800-chip L1Co overlay is
+        // not synced (its clean Costas lock doesn't need it). The pilot prompt still CARRIES that overlay,
+        // so projecting the data onto it would inject the overlay's pseudorandom +/-1 and scramble every
+        // symbol. The data component (L1Cd) has NO overlay, so read its carrier-wiped I directly: the
+        // carrier loop holds the despread signal on I (signal-in-I conj wipe), and the constant polarity
+        // is resolved by the nav decoder's frame-sync. (For Galileo this branch is only the brief
+        // pre-CS25-sync window, whose symbols are not used for decode.)
+        cur_I  = data_prompt_i_;
+        prev_I = old_data_prompt_i_;
     }
     else
     {
