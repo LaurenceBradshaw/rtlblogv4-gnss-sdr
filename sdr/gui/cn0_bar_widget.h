@@ -15,7 +15,8 @@ class Cn0_bar_widget : public QWidget
 public:
     struct Bar
     {
-        QString label;     // SV label, e.g. "G05"
+        QString label;     // SV label, e.g. "G05" (drawn on the top line under the bar)
+        QString code;      // signal component, e.g. "L1C" (drawn on the line below, to avoid overlap)
         double  cn0_db_hz; // current C/N0
         QColor  color;     // constellation colour
         bool    lock;      // carrier lock (solid vs dimmed)

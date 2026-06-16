@@ -56,7 +56,7 @@ void Receiver::enumerate_configured_sats()
         {
             if( prn_selected( sel.prns, sv ) )
             {
-                configured_sats_.push_back( { sig->params().constellation, sv } );
+                configured_sats_.push_back( { sig->params().constellation, sv, sig->params().code } );
             }
         }
     }
@@ -419,8 +419,9 @@ void Receiver::freeze_histories()
         Tracking_history::Snapshot snap = ch->history_snapshot();
         if( snap.iq.has_data || !snap.doppler.fast.hz.empty() )
         {
-            frozen[history_key( ch->signal().params().constellation, static_cast<int>( ch->satellite_id() ) )] =
-                std::move( snap );
+            frozen[history_key(
+                ch->signal().params().constellation, static_cast<int>( ch->satellite_id() ), ch->signal().params().code
+            )] = std::move( snap );
         }
     }
     std::lock_guard<std::mutex> lock( state_mutex_ );
@@ -460,9 +461,9 @@ Receiver_status Receiver::status() const
     return latest_status_;
 }
 
-void Receiver::subscribe_history( Constellation constellation, int prn, bool on ) const
+void Receiver::subscribe_history( Constellation constellation, int prn, Code code, bool on ) const
 {
-    const int                   key = history_key( constellation, prn );
+    const int                   key = history_key( constellation, prn, code );
     std::lock_guard<std::mutex> lock( state_mutex_ );
     if( on )
     {
@@ -476,10 +477,11 @@ void Receiver::subscribe_history( Constellation constellation, int prn, bool on 
     }
 }
 
-std::optional<Tracking_history::Snapshot> Receiver::published_history( Constellation constellation, int prn ) const
+std::optional<Tracking_history::Snapshot>
+Receiver::published_history( Constellation constellation, int prn, Code code ) const
 {
     std::lock_guard<std::mutex> lock( state_mutex_ );
-    if( auto it = published_histories_.find( history_key( constellation, prn ) ); it != published_histories_.end() )
+    if( auto it = published_histories_.find( history_key( constellation, prn, code ) ); it != published_histories_.end() )
     {
         return it->second;
     }
@@ -507,7 +509,9 @@ void Receiver::publish_histories()
     std::map<int, Tracking_history::Snapshot> fresh;
     for( Channel* ch : channel_ptrs_ )
     {
-        const int key = history_key( ch->signal().params().constellation, static_cast<int>( ch->satellite_id() ) );
+        const int key = history_key(
+            ch->signal().params().constellation, static_cast<int>( ch->satellite_id() ), ch->signal().params().code
+        );
         if( subs.count( key ) )
         {
             fresh[key] = ch->history_snapshot();

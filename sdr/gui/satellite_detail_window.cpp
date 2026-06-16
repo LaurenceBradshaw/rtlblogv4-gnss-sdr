@@ -27,22 +27,26 @@ const char* state_text( Channel_state s )
     }
 }
 
-QString sv_label( Constellation c, int prn )
+QString sv_label( Constellation c, int prn, Code code )
 {
-    return QString::asprintf( "%s%02d  (%s PRN %d)", constellation_prefix( c ), prn, constellation_name( c ), prn );
+    return QString::asprintf(
+        "%s%02d %s  (%s PRN %d)", constellation_prefix( c ), prn, gui_format::code_label( code ),
+        constellation_name( c ), prn
+    );
 }
 } // namespace
 
 Satellite_detail_window::Satellite_detail_window(
-    Constellation constellation, int prn, const Receiver& receiver, QWidget* parent
+    Constellation constellation, int prn, Code code, const Receiver& receiver, QWidget* parent
 )
     : QWidget( parent, Qt::Window ) // separate top-level window even though parented (for cleanup on exit)
     , constellation_( constellation )
     , prn_( prn )
+    , code_( code )
     , receiver_( receiver )
 {
     setAttribute( Qt::WA_DeleteOnClose );
-    setWindowTitle( sv_label( constellation, prn ) );
+    setWindowTitle( sv_label( constellation, prn, code ) );
     resize( 360, 560 );
 
     auto* layout = new QVBoxLayout( this );
@@ -67,6 +71,7 @@ Satellite_detail_window::Satellite_detail_window(
     Channel_snapshot initial;
     initial.constellation = constellation;
     initial.satellite_id  = static_cast<Satellite_id>( prn );
+    initial.code          = code;
     update_snapshot( initial );
 }
 
@@ -78,7 +83,7 @@ void Satellite_detail_window::open_iq_constellation()
         iq_window_->activateWindow();
         return;
     }
-    iq_window_ = new Iq_constellation_window( constellation_, prn_, receiver_, this );
+    iq_window_ = new Iq_constellation_window( constellation_, prn_, code_, receiver_, this );
     connect( iq_window_, &QObject::destroyed, this, [this] { iq_window_ = nullptr; } );
     iq_window_->show();
 }
@@ -91,7 +96,7 @@ void Satellite_detail_window::open_doppler()
         doppler_window_->activateWindow();
         return;
     }
-    doppler_window_ = new Doppler_graph_window( constellation_, prn_, receiver_, this );
+    doppler_window_ = new Doppler_graph_window( constellation_, prn_, code_, receiver_, this );
     connect( doppler_window_, &QObject::destroyed, this, [this] { doppler_window_ = nullptr; } );
     doppler_window_->show();
 }
@@ -106,7 +111,7 @@ void Satellite_detail_window::update_snapshot( const Channel_snapshot& s )
         line( label, QString::asprintf( fmt, v ) );
     };
 
-    t += sv_label( s.constellation, s.satellite_id ) + "\n\n";
+    t += sv_label( s.constellation, s.satellite_id, s.code ) + "\n\n";
 
     line( "State", QString::fromLatin1( state_text( s.state ) ) );
     line( "Carrier lock", s.has_lock ? QStringLiteral( "yes" ) : QStringLiteral( "no" ) );
@@ -155,6 +160,6 @@ void Satellite_detail_window::update_snapshot( const Channel_snapshot& s )
 
 void Satellite_detail_window::closeEvent( QCloseEvent* event )
 {
-    emit closed( constellation_, prn_ ); // the list drops us from its map before WA_DeleteOnClose fires
+    emit closed( constellation_, prn_, code_ ); // the list drops us from its map before WA_DeleteOnClose fires
     QWidget::closeEvent( event );
 }

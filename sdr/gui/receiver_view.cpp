@@ -25,6 +25,7 @@ Gui_frame Receiver_view::poll() const
             Channel_snapshot s;
             s.constellation = sat.constellation;
             s.satellite_id  = static_cast<Satellite_id>( sat.prn );
+            s.code          = sat.code; // so an idle L1C row is distinct from idle L1CA for the same SV
             s.state         = Channel_state::IDLE;
             frame.channels.push_back( s );
         }

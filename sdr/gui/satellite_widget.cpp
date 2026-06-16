@@ -7,6 +7,7 @@
 
 namespace
 {
+using gui_format::code_label;
 using gui_format::constellation_prefix;
 
 const char* state_text( Channel_state s )
@@ -23,8 +24,8 @@ const char* state_text( Channel_state s )
 }
 
 // Shared column layout for the header and every row (monospace, so the columns line up):
-//   SV(4)  STATE(6)  C/N0(7)  DOPPLER(12)  LOCK(6)  EPH(4)
-constexpr const char* ROW_FORMAT = "%-4s %-6s %7s %12s %-6s %-4s";
+//   SV(4)  CODE(5)  STATE(6)  C/N0(7)  DOPPLER(12)  LOCK(6)  EPH(4)
+constexpr const char* ROW_FORMAT = "%-4s %-5s %-6s %7s %12s %-6s %-4s";
 } // namespace
 
 Satellite_widget::Satellite_widget( QWidget* parent )
@@ -43,13 +44,14 @@ Satellite_widget::Satellite_widget( QWidget* parent )
 
 QString Satellite_widget::header_text()
 {
-    return QString::asprintf( ROW_FORMAT, "SV", "STATE", "C/N0", "DOPPLER", "LOCK", "EPH" );
+    return QString::asprintf( ROW_FORMAT, "SV", "CODE", "STATE", "C/N0", "DOPPLER", "LOCK", "EPH" );
 }
 
 void Satellite_widget::update_snapshot( const Channel_snapshot& s )
 {
     constellation_ = s.constellation;
     prn_           = static_cast<int>( s.satellite_id );
+    code_          = s.code;
 
     const QString sv       = QString::asprintf( "%s%02d", constellation_prefix( s.constellation ), s.satellite_id );
     const bool    tracking = ( s.state == Channel_state::TRACKING );
@@ -64,6 +66,7 @@ void Satellite_widget::update_snapshot( const Channel_snapshot& s )
         QString::asprintf(
             ROW_FORMAT,
             sv.toUtf8().constData(),
+            code_label( s.code ),
             state_text( s.state ),
             cn0.toUtf8().constData(),
             dopp.toUtf8().constData(),
@@ -77,6 +80,6 @@ void Satellite_widget::mousePressEvent( QMouseEvent* event )
 {
     if( event->button() == Qt::LeftButton )
     {
-        emit clicked( constellation_, prn_ );
+        emit clicked( constellation_, prn_, code_ );
     }
 }

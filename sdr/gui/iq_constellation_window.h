@@ -8,7 +8,9 @@ class Iq_constellation_window : public Graph_window
 {
     Q_OBJECT
 public:
-    Iq_constellation_window( Constellation constellation, int prn, const Receiver& receiver, QWidget* parent = nullptr );
+    Iq_constellation_window(
+        Constellation constellation, int prn, Code code, const Receiver& receiver, QWidget* parent = nullptr
+    );
 
 protected:
     void refresh() override;

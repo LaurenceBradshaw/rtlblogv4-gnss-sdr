@@ -52,9 +52,9 @@ Satellite_list_widget::Satellite_list_widget( const Receiver& receiver, QWidget*
     update_frame( Gui_frame {} );
 }
 
-int Satellite_list_widget::key_of( Constellation constellation, int prn )
+int Satellite_list_widget::key_of( Constellation constellation, int prn, Code code )
 {
-    return static_cast<int>( constellation ) * 1000 + prn;
+    return ( static_cast<int>( constellation ) * 1000 + prn ) * 10 + static_cast<int>( code );
 }
 
 void Satellite_list_widget::update_frame( const Gui_frame& frame )
@@ -66,7 +66,7 @@ void Satellite_list_widget::update_frame( const Gui_frame& frame )
 
     for( const Channel_snapshot& s : frame.channels )
     {
-        const int key = key_of( s.constellation, static_cast<int>( s.satellite_id ) );
+        const int key = key_of( s.constellation, static_cast<int>( s.satellite_id ), s.code );
         present_keys.insert( key );
 
         Satellite_widget*& row = rows_[key];
@@ -83,6 +83,7 @@ void Satellite_list_widget::update_frame( const Gui_frame& frame )
             ++tracking_count;
             bars[key] = Cn0_bar_widget::Bar {
                 QString::asprintf( "%s%02d", gui_format::constellation_prefix( s.constellation ), s.satellite_id ),
+                QString::fromUtf8( gui_format::code_label( s.code ) ),
                 s.cn0_db_hz,
                 gui_format::constellation_color( s.constellation ),
                 s.has_lock
@@ -155,9 +156,9 @@ void Satellite_list_widget::update_frame( const Gui_frame& frame )
     cn0_bars_->set_bars( std::move( bar_list ) );
 }
 
-void Satellite_list_widget::open_detail( Constellation constellation, int prn )
+void Satellite_list_widget::open_detail( Constellation constellation, int prn, Code code )
 {
-    const int key = key_of( constellation, prn );
+    const int key = key_of( constellation, prn, code );
 
     if( auto it = detail_windows_.find( key ); it != detail_windows_.end() )
     {
@@ -168,13 +169,13 @@ void Satellite_list_widget::open_detail( Constellation constellation, int prn )
 
     // Parent to this widget's top-level window (so it is cleaned up on exit) but flagged as its own
     // window. It refreshes from update_frame and removes itself from the map when closed.
-    auto* win            = new Satellite_detail_window( constellation, prn, receiver_, window() );
+    auto* win            = new Satellite_detail_window( constellation, prn, code, receiver_, window() );
     detail_windows_[key] = win;
     connect(
         win,
         &Satellite_detail_window::closed,
         this,
-        [this]( Constellation c, int p ) { detail_windows_.erase( key_of( c, p ) ); }
+        [this]( Constellation c, int p, Code k ) { detail_windows_.erase( key_of( c, p, k ) ); }
     );
     win->show();
 }

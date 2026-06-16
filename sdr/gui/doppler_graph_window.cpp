@@ -7,13 +7,17 @@
 #include "gnss_format.h"
 
 Doppler_graph_window::Doppler_graph_window(
-    Constellation constellation, int prn, const Receiver& receiver, QWidget* parent
+    Constellation constellation, int prn, Code code, const Receiver& receiver, QWidget* parent
 )
     : Graph_window(
           constellation,
           prn,
+          code,
           receiver,
-          QString::asprintf( "%s%02d  Carrier Doppler", gui_format::constellation_prefix( constellation ), prn ),
+          QString::asprintf(
+              "%s%02d %s  Carrier Doppler", gui_format::constellation_prefix( constellation ), prn,
+              gui_format::code_label( code )
+          ),
           parent
       )
 {

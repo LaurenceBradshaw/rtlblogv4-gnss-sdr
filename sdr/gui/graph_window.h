@@ -2,6 +2,7 @@
 #include <optional>
 #include <QWidget>
 #include "constellations.h"    // Constellation
+#include "signal.h"            // Code
 #include "tracking_history.h"  // Tracking_history::Snapshot
 
 class Receiver;
@@ -17,7 +18,8 @@ class Graph_window : public QWidget
     Q_OBJECT
 public:
     Graph_window(
-        Constellation constellation, int prn, const Receiver& receiver, const QString& title, QWidget* parent = nullptr
+        Constellation constellation, int prn, Code code, const Receiver& receiver, const QString& title,
+        QWidget* parent = nullptr
     );
     ~Graph_window() override; // unsubscribe
 
@@ -28,6 +30,7 @@ protected:
 
     Constellation   constellation_;
     int             prn_;
+    Code            code_;
     const Receiver& receiver_;
 
 private:

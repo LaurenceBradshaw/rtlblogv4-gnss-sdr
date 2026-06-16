@@ -3,6 +3,7 @@
 #include <vector>
 #include "constellations.h" // Constellation
 #include "gui_panel.h"
+#include "signal.h"         // Code
 
 struct Channel_snapshot;
 class Receiver;
@@ -28,8 +29,10 @@ public:
     void update_frame( const Gui_frame& frame ) override;
 
 private:
-    static int key_of( Constellation constellation, int prn );
-    void       open_detail( Constellation constellation, int prn ); // row-click handler
+    // Keyed by (constellation, prn, code) so an SV tracked on two components (e.g. GPS L1CA + L1C) gets a
+    // row, detail window, and C/N0 bar per code rather than colliding into one.
+    static int key_of( Constellation constellation, int prn, Code code );
+    void       open_detail( Constellation constellation, int prn, Code code ); // row-click handler
 
     const Receiver&                         receiver_;             // for opening detail/graph windows
     QLabel*                                 summary_     = nullptr; // "Tracking N of M satellites"

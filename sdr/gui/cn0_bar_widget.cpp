@@ -9,7 +9,7 @@ namespace
 constexpr double CN0_MAX     = 55.0; // dB-Hz top of the scale (typical strong-signal ceiling)
 constexpr double CN0_STEP    = 10.0; // gridline spacing
 constexpr int    MARGIN_L    = 34;   // room for the Y-axis labels
-constexpr int    MARGIN_B    = 20;   // room for the SV labels
+constexpr int    MARGIN_B    = 32;   // room for the two-line SV + code labels
 constexpr int    MARGIN_T    = 8;
 constexpr int    MARGIN_R    = 8;
 constexpr double BAR_GAP_FRAC = 0.25; // fraction of each slot left as gap
@@ -78,15 +78,15 @@ void Cn0_bar_widget::paintEvent( QPaintEvent* )
         }
         p.fillRect( bar, fill );
 
-        // SV label under the bar (drop it if slots get too narrow to read).
+        // Two-line label under the bar: SV on top, signal component below (so a "G04" + "L1C" pair does
+        // not run together at narrow slot widths). Dropped entirely if slots get too narrow to read.
         if( slot >= 16.0 )
         {
+            const double lh = ( MARGIN_B - 2 ) / 2.0;
             p.setPen( QColor( 200, 200, 200 ) );
-            p.drawText(
-                QRectF( plot.left() + i * slot, plot.bottom() + 2, slot, MARGIN_B - 2 ),
-                Qt::AlignCenter,
-                b.label
-            );
+            p.drawText( QRectF( plot.left() + i * slot, plot.bottom() + 2, slot, lh ), Qt::AlignCenter, b.label );
+            p.setPen( QColor( 150, 150, 150 ) ); // the code dimmer, as secondary identity
+            p.drawText( QRectF( plot.left() + i * slot, plot.bottom() + 2 + lh, slot, lh ), Qt::AlignCenter, b.code );
         }
     }
 }
@@ -106,7 +106,10 @@ bool Cn0_bar_widget::event( QEvent* event )
             {
                 QToolTip::showText(
                     help->globalPos(),
-                    QStringLiteral( "%1: %2 dB-Hz" ).arg( bars_[i].label ).arg( bars_[i].cn0_db_hz, 0, 'f', 1 ),
+                    QStringLiteral( "%1 %2: %3 dB-Hz" )
+                        .arg( bars_[i].label )
+                        .arg( bars_[i].code )
+                        .arg( bars_[i].cn0_db_hz, 0, 'f', 1 ),
                     this
                 );
                 return true;

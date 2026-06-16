@@ -74,6 +74,7 @@ struct Configured_satellite
 {
     Constellation constellation = Constellation::Unknown;
     int           prn           = 0;
+    Code          code          = Code::CA; // signal component - so the GUI idle row matches its code
 };
 
 // Owns the whole receiver pipeline (source -> channels -> observables -> PVT) and drives its
@@ -138,8 +139,10 @@ public:
     // tick. So the GUI never touches a live channel - it reads published copies, like the snapshots. One
     // subscription per SV publishes the whole history (I/Q + Doppler), so every graph type shares it.
     // const + mutable state (guarded by state_mutex_) so a const Receiver& suffices for the GUI.
-    void                                      subscribe_history( Constellation constellation, int prn, bool on ) const;
-    std::optional<Tracking_history::Snapshot> published_history( Constellation constellation, int prn ) const;
+    // Keyed by (constellation, PRN, CODE) so one SV tracked on two components (e.g. GPS L1CA + L1C) has
+    // an independent history per code - the GUI shows a separate row + graphs for each.
+    void subscribe_history( Constellation constellation, int prn, Code code, bool on ) const;
+    std::optional<Tracking_history::Snapshot> published_history( Constellation constellation, int prn, Code code ) const;
 
 private:
     void setup();               // construct device/buffer/signals/channels/pool/scheduler
@@ -149,9 +152,11 @@ private:
     void freeze_histories();    // at EOF: snapshot ALL data-having channels so graphs keep their last state
     void clear_published_state(); // reset the GUI-visible published state (on Stop / fresh Start)
 
-    static int history_key( Constellation constellation, int prn )
+    static int history_key( Constellation constellation, int prn, Code code )
     {
-        return static_cast<int>( constellation ) * 1000 + prn;
+        // (constellation, prn) * 10 + code: Code has < 10 values, so this stays collision-free and keeps
+        // the two codes of one SV (e.g. GPS L1CA / L1C) on distinct keys.
+        return ( static_cast<int>( constellation ) * 1000 + prn ) * 10 + static_cast<int>( code );
     }
 
     Receiver_config                   config_;

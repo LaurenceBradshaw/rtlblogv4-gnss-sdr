@@ -8,21 +8,22 @@ constexpr int REFRESH_MS = 50; // 20 Hz (history is published at ~10 Hz; this ju
 }
 
 Graph_window::Graph_window(
-    Constellation constellation, int prn, const Receiver& receiver, const QString& title, QWidget* parent
+    Constellation constellation, int prn, Code code, const Receiver& receiver, const QString& title, QWidget* parent
 )
     : QWidget( parent, Qt::Window )
     , constellation_( constellation )
     , prn_( prn )
+    , code_( code )
     , receiver_( receiver )
 {
     setAttribute( Qt::WA_DeleteOnClose );
     setWindowTitle( title );
-    receiver_.subscribe_history( constellation_, prn_, true );
+    receiver_.subscribe_history( constellation_, prn_, code_, true );
 }
 
 Graph_window::~Graph_window()
 {
-    receiver_.subscribe_history( constellation_, prn_, false );
+    receiver_.subscribe_history( constellation_, prn_, code_, false );
 }
 
 void Graph_window::start_polling()
@@ -35,5 +36,5 @@ void Graph_window::start_polling()
 
 std::optional<Tracking_history::Snapshot> Graph_window::history() const
 {
-    return receiver_.published_history( constellation_, prn_ );
+    return receiver_.published_history( constellation_, prn_, code_ );
 }

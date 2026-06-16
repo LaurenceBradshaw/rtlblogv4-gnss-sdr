@@ -20,7 +20,7 @@ public:
     static QString header_text();
 
 signals:
-    void clicked( Constellation constellation, int prn );
+    void clicked( Constellation constellation, int prn, Code code );
 
 protected:
     void mousePressEvent( QMouseEvent* event ) override;
@@ -29,4 +29,5 @@ private:
     QLabel*       line_          = nullptr;
     Constellation constellation_ = Constellation::Unknown; // this row's SV identity (for clicked())
     int           prn_           = 0;
+    Code          code_          = Code::CA; // signal component - one row per (SV, code)
 };

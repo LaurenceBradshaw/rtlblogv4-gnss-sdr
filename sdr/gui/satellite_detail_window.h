@@ -15,7 +15,9 @@ class Satellite_detail_window : public QWidget
 {
     Q_OBJECT
 public:
-    Satellite_detail_window( Constellation constellation, int prn, const Receiver& receiver, QWidget* parent = nullptr );
+    Satellite_detail_window(
+        Constellation constellation, int prn, Code code, const Receiver& receiver, QWidget* parent = nullptr
+    );
 
     Constellation constellation() const
     {
@@ -25,11 +27,15 @@ public:
     {
         return prn_;
     }
+    Code code() const
+    {
+        return code_;
+    }
 
     void update_snapshot( const Channel_snapshot& snapshot );
 
 signals:
-    void closed( Constellation constellation, int prn );
+    void closed( Constellation constellation, int prn, Code code );
 
 protected:
     void closeEvent( QCloseEvent* event ) override;
@@ -40,6 +46,7 @@ private:
 
     Constellation            constellation_;
     int                      prn_;
+    Code                     code_;
     const Receiver&          receiver_;
     QLabel*                  text_           = nullptr; // monospace block of all fields
     Iq_constellation_window* iq_window_      = nullptr; // open graph windows (if any), so we raise vs dup

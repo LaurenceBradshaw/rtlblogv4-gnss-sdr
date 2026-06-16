@@ -81,6 +81,12 @@ void Gps_l1c_decoder::build_sf1_templates()
 Gps_l1c_decoder::Gps_l1c_decoder( Satellite_id prn )
     : satellite_id_( prn )
 {
+    // Stamp the constellation + PRN on eph_ up front (eph_ stays INVALID until a frame decodes - this is
+    // only identity, not an observable) so the channel snapshot reports GPS/PRN from the first epoch. Else
+    // an undecoded L1C channel publishes constellation=Unknown -> the GUI shows "?04", a grey C/N0 bar, and
+    // no graph data (the per-SV history subscription keys on the constellation). Mirrors the L1CA decoder.
+    eph_.constellation = Constellation::Gps;
+    eph_.prn           = prn;
     build_sf1_templates();
     syms_.reserve( 4 * WINDOW );
 }

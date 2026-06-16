@@ -10,7 +10,9 @@ class Doppler_graph_window : public Graph_window
 {
     Q_OBJECT
 public:
-    Doppler_graph_window( Constellation constellation, int prn, const Receiver& receiver, QWidget* parent = nullptr );
+    Doppler_graph_window(
+        Constellation constellation, int prn, Code code, const Receiver& receiver, QWidget* parent = nullptr
+    );
 
 protected:
     void refresh() override;
