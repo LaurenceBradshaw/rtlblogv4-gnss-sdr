@@ -1,8 +1,11 @@
 #include "receiver.h"
 #include <chrono>
+#include <cmath>
 #include <fmt/format.h>
 #include <thread>
+#include "geodesy.h"
 #include "logging.h"
+#include "orbit.h"
 #include "rtlsdr_device.h"
 #include "sample_buffer.h"
 #include "scheduler.h"
@@ -59,6 +62,40 @@ void Receiver::enumerate_configured_sats()
                 configured_sats_.push_back( { sig->params().constellation, sv, sig->params().code } );
             }
         }
+    }
+}
+
+void Receiver::update_acquisition_predictions( const Position_solution& fix )
+{
+    // GPS almanac only for now. The receiver-wide almanac_ was just refreshed on this same (run) thread,
+    // so reading it here without the lock is safe (the lock only guards GUI readers).
+    constexpr double C        = 299792458.0;
+    constexpr double EL_MASK  = -2.0 * 3.14159265358979 / 180.0; // skip only SVs clearly below the horizon
+    const Ecef       user { fix.ecef_x_m, fix.ecef_y_m, fix.ecef_z_m };
+    const double     t = obs_engine_.reception_time_s(); // current GPS time of week (s)
+
+    for( const Configured_satellite& sat : configured_sats_ )
+    {
+        if( sat.constellation != Constellation::Gps )
+        {
+            continue;
+        }
+        const auto it = almanac_.find( sat.prn );
+        if( it == almanac_.end() || !it->second.valid )
+        {
+            continue; // no almanac for this SV yet -> leave it searchable / common-mode aided
+        }
+        const Ephemeris eph = it->second.as_ephemeris();
+        const Ecef      sp  = orbit::satellite_ecef_pos( eph, t, Constellation::Gps );
+        const Ecef      sv  = orbit::satellite_ecef_vel( eph, t, Constellation::Gps );
+        double          el = 0.0, az = 0.0;
+        look_angles( user, sp, el, az );
+        // Predicted line-of-sight Doppler as a fraction of carrier: range-rate = sat_vel . LOS (static rx),
+        // physical Doppler fraction = -range_rate/c (matches Channel_snapshot::range_rate_at's convention).
+        const double dx = sp.x - user.x, dy = sp.y - user.y, dz = sp.z - user.z;
+        const double r  = std::sqrt( dx * dx + dy * dy + dz * dz );
+        const double rr = ( r > 0.0 ) ? ( sv.x * dx + sv.y * dy + sv.z * dz ) / r : 0.0;
+        aiding_.set_prediction( Constellation::Gps, sat.prn, el > EL_MASK, -rr / C );
     }
 }
 
@@ -289,14 +326,25 @@ void Receiver::run()
         {
             std::vector<Channel_snapshot> snaps;
             snaps.reserve( channel_ptrs_.size() );
+            std::map<int, Gps_almanac> alm_updates; // gathered outside state_mutex_ (uses snapshot_mutex_)
             for( Channel* ch : channel_ptrs_ )
             {
                 snaps.push_back( ch->snapshot() );
+                for( const auto& [prn, a] : ch->almanac_snapshot() )
+                {
+                    alm_updates[prn] = a; // any channel's copy of an SV's almanac is the same broadcast data
+                }
             }
             std::lock_guard<std::mutex> lock( state_mutex_ );
             latest_position_  = current_position;
             latest_snapshots_ = std::move( snaps );
             latest_status_    = status;
+            // Receiver-wide almanac: accumulate (never drop), so an SV's coarse orbit persists for
+            // acquisition aiding even after the channel that decoded it stops tracking.
+            for( const auto& [prn, a] : alm_updates )
+            {
+                almanac_[prn] = a;
+            }
         }
 
         publish_histories();
@@ -312,6 +360,7 @@ void Receiver::run()
         if( current_position && current_position->valid )
         {
             aiding_.set_clock_fraction( current_position->clock_drift_m_s / 299792458.0 );
+            update_acquisition_predictions( *current_position );
         }
 
         if( ++tick % LOG_EVERY_N == 0 )
@@ -435,6 +484,7 @@ void Receiver::clear_published_state()
     latest_snapshots_.clear();
     latest_status_ = {};
     published_histories_.clear();
+    almanac_.clear(); // fresh run starts with an empty almanac (warm-start persistence is a future nicety)
     // history_subscriptions_ is left intact: graph windows that are still open want data again on a restart.
 }
 

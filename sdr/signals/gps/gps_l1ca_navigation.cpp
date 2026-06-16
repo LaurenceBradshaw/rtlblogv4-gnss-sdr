@@ -1,10 +1,12 @@
 #include "gps_l1ca_navigation.h"
-#include <cstdio>
-#include <cstdlib>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <map>
+#include "almanac.h"
 #include "logging.h"
 
 // File-scope helpers (mirrors sdrnav.c / sdrnav_gps.c utilities)
@@ -95,7 +97,13 @@ static bool parity_check_word( const int* d )
 
 // GPS ICD scale factors used in subframe decode
 static constexpr double P2_5   = 1.0 / ( 1LL << 5 );
+static constexpr double P2_11  = 1.0 / ( 1LL << 11 );
+static constexpr double P2_17  = 1.0 / ( 1LL << 17 );
 static constexpr double P2_19  = 1.0 / ( 1LL << 19 );
+static constexpr double P2_20  = 1.0 / ( 1LL << 20 );
+static constexpr double P2_21  = 1.0 / ( 1LL << 21 );
+static constexpr double P2_23  = 1.0 / ( 1LL << 23 );
+static constexpr double P2_38  = 1.0 / ( 1LL << 38 );
 static constexpr double P2_24  = 1.0 / ( 1LL << 24 );
 static constexpr double P2_27  = 1.0 / ( 1LL << 27 );
 static constexpr double P2_29  = 1.0 / ( 1LL << 29 );
@@ -124,14 +132,14 @@ static int adjust_gps_week( int transmitted_week ) // TODO: Using system clock d
 
 static void decode_sf1( const uint8_t* buf, Gps_ephemeris& e )
 {
-    e.tow  = getbitu( buf, 30, 17 ) * 6.0;
-    e.week = adjust_gps_week( static_cast<int>( getbitu( buf, 60, 10 ) ) );
-    e.iodc = static_cast<int>( getbitu2( buf, 82, 2, 210, 8 ) );
+    e.tow         = getbitu( buf, 30, 17 ) * 6.0;
+    e.week        = adjust_gps_week( static_cast<int>( getbitu( buf, 60, 10 ) ) );
+    e.iodc        = static_cast<int>( getbitu2( buf, 82, 2, 210, 8 ) );
     e.group_delay = getbits( buf, 196, 8 ) * P2_31;
-    e.toc  = getbitu( buf, 218, 16 ) * 16.0;
-    e.af2  = getbits( buf, 240, 8 ) * P2_55;
-    e.af1  = getbits( buf, 248, 16 ) * P2_43;
-    e.af0  = getbits( buf, 270, 22 ) * P2_31;
+    e.toc         = getbitu( buf, 218, 16 ) * 16.0;
+    e.af2         = getbits( buf, 240, 8 ) * P2_55;
+    e.af1         = getbits( buf, 248, 16 ) * P2_43;
+    e.af0         = getbits( buf, 270, 22 ) * P2_31;
 }
 
 static void decode_sf2( const uint8_t* buf, Gps_ephemeris& e )
@@ -182,9 +190,45 @@ static void decode_sf4( const uint8_t* buf, Iono& iono )
     iono.beta[1]      = getbits( buf, 120, 8 ) * 16384.0; // 2^14
     iono.beta[2]      = getbits( buf, 128, 8 ) * 65536.0; // 2^16
     iono.beta[3]      = getbits( buf, 136, 8 ) * 65536.0; // 2^16
-    iono.leap_seconds = getbits( buf, 240, 8 ); // dt_LS (word 9)
+    iono.leap_seconds = getbits( buf, 240, 8 );           // dt_LS (word 9)
     iono.model        = Iono::Model::Klobuchar;
     iono.valid        = true;
+}
+
+// Decode a GPS ALMANAC page (the coarse constellation-wide orbits subcommutated over SF4/SF5). Per
+// IS-GPS-200 20.3.3.5: the per-SV almanac is SF5 pages 1-24 (SVs 1-24) + SF4 pages 2-10 (SVs 25-32),
+// each identified by the SV ID in word 3 (bits 62-67). Word-aligned bit positions (this codebase keeps the
+// 6 parity bits per 30-bit word, so words start every 30 bits); field order + scales mirror RTKLIB
+// decode_alm_sat(). `week` is the current GPS week (from the decoded ephemeris) - the almanac page carries
+// only toa-within-week. Returns the PRN (and fills alm[prn]) if this was an almanac page, else 0.
+static int decode_almanac( const uint8_t* buf, int sfn, int week, std::map<int, Gps_almanac>& alm )
+{
+    const int  svid        = static_cast<int>( getbitu( buf, 62, 6 ) ); // page SV ID (== the PRN for almanac pages)
+    const bool is_alm_page = ( sfn == 5 && svid >= 1 && svid <= 24 ) || ( sfn == 4 && svid >= 25 && svid <= 32 );
+    if( !is_alm_page )
+    {
+        return 0; // iono (p18), health/config (p25), or a reserved page
+    }
+
+    Gps_almanac a;
+    a.prn      = static_cast<Satellite_id>( svid );
+    a.e        = getbitu( buf, 68, 16 ) * P2_21;
+    a.toa      = getbitu( buf, 90, 8 ) * 4096.0;                    // 2^12
+    a.i0       = ( 0.3 + getbits( buf, 98, 16 ) * P2_19 ) * SC2RAD; // 0.3 semicircles reference + delta_i
+    a.omegadot = getbits( buf, 120, 16 ) * P2_38 * SC2RAD;
+    a.health   = static_cast<int>( getbitu( buf, 136, 8 ) );
+    a.sqrt_a   = getbitu( buf, 150, 24 ) * P2_11;
+    a.omega0   = getbits( buf, 180, 24 ) * P2_23 * SC2RAD;
+    a.omega    = getbits( buf, 210, 24 ) * P2_23 * SC2RAD;
+    a.m0       = getbits( buf, 240, 24 ) * P2_23 * SC2RAD;
+    // af0 (11-bit, signed) is split: 8 MSBs at 270, 3 LSBs at 289 (af1 sits between). Mirror RTKLIB exactly.
+    const int af0_8 = static_cast<int>( getbits( buf, 270, 8 ) );
+    a.af1           = getbits( buf, 278, 11 ) * P2_38;
+    a.af0           = getbitu( buf, 289, 3 ) * P2_17 + af0_8 * P2_20;
+    a.week          = week;
+    a.valid         = true;
+    alm[svid]       = a;
+    return svid;
 }
 
 // Dispatch to the appropriate subframe decoder based on the HOW subframe ID.
@@ -233,7 +277,6 @@ void Gps_l1ca_decoder::process( double prompt_i, double prompt_i_prev )
     // bit_count_ = current position within the 20-epoch bit period
     // mirrors: sdr->nav.biti = cnt % sdr->nav.rate
     bit_count_ = static_cast<int>( epoch_count_ % NAV_RATE );
-
 
     // Bit synchronisation: wait 2 seconds before starting (mirrors: cnt>2000/(ctime*1000))
     if( !bit_sync_found_ && epoch_count_ > 2000 )
@@ -507,6 +550,34 @@ void Gps_l1ca_decoder::decode_subframe()
     const bool had_iono = iono_.valid;
     const int  sfn      = decode_gps_frame( bin, eph_current_, iono_ );
 
+    // Almanac (SF4/SF5 pages) - coarse constellation-wide orbits for acquisition aiding (not PVT). One
+    // tracked SV slowly fills the whole set; aggregated receiver-wide by the engine via almanac().
+    if( sfn == 4 || sfn == 5 )
+    {
+        const size_t known_before = almanac_.size();
+        if( int aprn = decode_almanac( bin, sfn, eph_current_.week, almanac_ ) )
+        {
+            if( almanac_.size() > known_before ) // log once per newly-known SV (pages re-decode every cycle)
+            {
+                const Gps_almanac& a = almanac_[aprn];
+                logging::log(
+                    logging::Level::Info,
+                    fmt::format(
+                        "Navigation - GPS PRN {:2d} decoded ALMANAC for PRN {:2d} (toa={:.0f} sqrtA={:.2f} "
+                        "e={:.3e} health={}); {} SVs known",
+                        satellite_id_,
+                        a.prn,
+                        a.toa,
+                        a.sqrt_a,
+                        a.e,
+                        a.health,
+                        almanac_.size()
+                    )
+                );
+            }
+        }
+    }
+
     if( sfn >= 1 && sfn <= 3 )
     {
         sf_decoded_ |= ( 1 << ( sfn - 1 ) );
@@ -657,14 +728,14 @@ TEST_CASE( "gps_getbitu_extracts_msb_first", "[gps][nav][bits]" )
 
 TEST_CASE( "gps_getbits_sign_extends", "[gps][nav][bits]" )
 {
-    const uint8_t ff[1]   = { 0xFF }; // 8-bit -1
-    const uint8_t x80[1]  = { 0x80 }; // 8-bit -128
-    const uint8_t x40[1]  = { 0x40 }; // 8-bit +64
+    const uint8_t ff[1]  = { 0xFF }; // 8-bit -1
+    const uint8_t x80[1] = { 0x80 }; // 8-bit -128
+    const uint8_t x40[1] = { 0x40 }; // 8-bit +64
     REQUIRE( getbits( ff, 0, 8 ) == -1 );
     REQUIRE( getbits( x80, 0, 8 ) == -128 );
     REQUIRE( getbits( x40, 0, 8 ) == 64 );
-    REQUIRE( getbits( ff, 0, 4 ) == -1 );  // 0b1111 sign-extended
-    REQUIRE( getbits( x40, 1, 2 ) == -2 ); // bits 1..2 of 0100 0000 = 0b10 = -2
+    REQUIRE( getbits( ff, 0, 4 ) == -1 );    // 0b1111 sign-extended
+    REQUIRE( getbits( x40, 1, 2 ) == -2 );   // bits 1..2 of 0100 0000 = 0b10 = -2
     REQUIRE( getbitu( x80, 0, 8 ) == 128u ); // unsigned counterpart differs
 }
 
@@ -694,7 +765,8 @@ TEST_CASE( "gps_parity_round_trip_over_data", "[gps][nav][parity]" )
 {
     // Build a valid word for arbitrary data + carries by evaluating the ICD parity equations
     // (IS-GPS-200 Table 20-XIV), then confirm the decoder accepts it and rejects a data flip.
-    auto encode = []( int* d ) {
+    auto encode = []( int* d )
+    {
         // clang-format off
         d[26] = d[0]*d[2]*d[3]*d[4]*d[6]*d[7]*d[11]*d[12]*d[13]*d[14]*d[15]*d[18]*d[19]*d[21]*d[24];
         d[27] = d[1]*d[3]*d[4]*d[5]*d[7]*d[8]*d[12]*d[13]*d[14]*d[15]*d[16]*d[19]*d[20]*d[22]*d[25];
@@ -712,8 +784,8 @@ TEST_CASE( "gps_parity_round_trip_over_data", "[gps][nav][parity]" )
         for( uint32_t pat : patterns )
         {
             int d[32];
-            d[0] = ( carry & 1 ) ? -1 : 1;       // D29*
-            d[1] = ( carry & 1 ) ? 1 : -1;       // D30*
+            d[0] = ( carry & 1 ) ? -1 : 1; // D29*
+            d[1] = ( carry & 1 ) ? 1 : -1; // D30*
             for( int i = 0; i < 24; ++i )
             {
                 d[2 + i] = ( ( pat >> ( 23 - i ) ) & 1u ) ? -1 : 1;
@@ -734,7 +806,8 @@ namespace
 // Parse a 76-char hex string into the 38-byte packed subframe buffer.
 std::array<uint8_t, 38> sf_from_hex( const char* hex )
 {
-    auto nib = []( char ch ) -> int {
+    auto nib = []( char ch ) -> int
+    {
         if( ch >= '0' && ch <= '9' )
             return ch - '0';
         return ( ch | 0x20 ) - 'a' + 10; // lower-case a-f
@@ -793,13 +866,13 @@ TEST_CASE( "gps_decode_real_subframes_prn1", "[gps][nav][ephemeris][cttc]" )
 
     // Physical plausibility (non-circular): the decoded Keplerian elements must describe a real GPS
     // orbit. If any scale factor / bit field were wrong, these would not hold.
-    REQUIRE( e.e < 0.03 );                                   // GPS eccentricity is small
+    REQUIRE( e.e < 0.03 );                                                      // GPS eccentricity is small
     REQUIRE( e.sqrt_a * e.sqrt_a == Catch::Approx( 26.56e6 ).epsilon( 0.01 ) ); // semi-major ~26 560 km
-    REQUIRE( e.i0 > 0.9 );                                   // inclination ~55 deg
+    REQUIRE( e.i0 > 0.9 );                                                      // inclination ~55 deg
     REQUIRE( e.i0 < 1.05 );
     e.constellation = Constellation::Gps;
-    const Ecef p = orbit::satellite_ecef_pos( e, e.toe, Constellation::Gps );
-    const double r = std::sqrt( p.x * p.x + p.y * p.y + p.z * p.z );
+    const Ecef   p  = orbit::satellite_ecef_pos( e, e.toe, Constellation::Gps );
+    const double r  = std::sqrt( p.x * p.x + p.y * p.y + p.z * p.z );
     REQUIRE( r == Catch::Approx( 26.56e6 ).epsilon( 0.02 ) ); // a real orbit radius from decoded elements
 }
 
@@ -828,7 +901,8 @@ TEST_CASE( "gps_how_tow_count_range_guard", "[gps][nav][tow]" )
 
     // (3) Threshold boundary. Set bits 30..46 (RTKLIB MSB-first, matching getbitu) to chosen counts and
     // confirm the > 100799 guard fires exactly at 100800 (one full week of 6 s counts), not at 100799.
-    auto set_bits = []( uint8_t* buf, int pos, int len, uint32_t val ) {
+    auto set_bits = []( uint8_t* buf, int pos, int len, uint32_t val )
+    {
         for( int i = 0; i < len; ++i )
         {
             const int      bitpos = pos + i;

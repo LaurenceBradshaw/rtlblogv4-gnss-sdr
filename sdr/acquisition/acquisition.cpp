@@ -16,9 +16,12 @@
 //   cpxcpx(rcode, NULL, 1.0, nfft, xcode);     // real -> complex, Q=0
 //   cpxfft(NULL, xcode, nfft);                  // FFT in-place
 Acquisition_engine::Acquisition_engine(
-    const Complex_buf& prn_code, double sample_rate_hz, const Signal_params& sig, const Acquisition_aiding& aiding
+    const Complex_buf& prn_code, Satellite_id satellite_id, double sample_rate_hz, const Signal_params& sig,
+    const Acquisition_aiding& aiding
 )
     : aiding_( aiding ),
+      satellite_id_( satellite_id ),
+      constellation_( sig.constellation ),
       doppler_center_bins_( 0 ),
       active_half_bins_( 0 ),
       result_ {},
@@ -109,7 +112,7 @@ bool Acquisition_engine::integrate( const Sample_block& block )
     // wide to search: wide while bootstrapping, narrow once >=2 SVs pin the offset.
     if( intg_count_ == 0 )
     {
-        const Acquisition_aiding::Estimate est = aiding_.estimate( carrier_freq_hz_ );
+        const Acquisition_aiding::Estimate est = aiding_.estimate( constellation_, satellite_id_, carrier_freq_hz_ );
         doppler_center_bins_                   = static_cast<int>( std::lround( est.center_hz / doppler_step_hz_ ) );
         const int half                         = static_cast<int>( std::lround( est.half_width_hz / doppler_step_hz_ ) );
         active_half_bins_                      = std::min( half, ( nfreq_ - 1 ) / 2 ); // <= allocated grid
@@ -348,7 +351,7 @@ TEST_CASE( "acquisition_synthetic_gps_signal", "[acquisition][gps]" )
     const Complex_buf blk = synth_block( code, m, inject_phase, inject_doppler );
 
     Acquisition_aiding aiding;
-    Acquisition_engine acq( code, ACQ_FS, sig->params(), aiding );
+    Acquisition_engine acq( code, 1, ACQ_FS, sig->params(), aiding );
     Sample_block       block { blk.data(), blk.size(), nullptr, 0 };
     for( int i = 0; i < acq.target_integrations(); ++i )
     {
@@ -381,7 +384,7 @@ TEST_CASE( "acquisition_cttc_real_gps_prn1", "[acquisition][gps][cttc]" )
     SECTION( "present satellite acquires" )
     {
         Acquisition_aiding aiding;
-        Acquisition_engine acq( sig->code_samples( 1, CTTC_SNIPPET_FS ), CTTC_SNIPPET_FS, sig->params(), aiding );
+        Acquisition_engine acq( sig->code_samples( 1, CTTC_SNIPPET_FS ), 1, CTTC_SNIPPET_FS, sig->params(), aiding );
         REQUIRE( acq.integrate( block ) );
         const Acquisition_result r = acq.result();
         REQUIRE( r.found );
@@ -392,7 +395,7 @@ TEST_CASE( "acquisition_cttc_real_gps_prn1", "[acquisition][gps][cttc]" )
     SECTION( "absent satellite does not acquire" )
     {
         Acquisition_aiding aiding;
-        Acquisition_engine acq( sig->code_samples( 4, CTTC_SNIPPET_FS ), CTTC_SNIPPET_FS, sig->params(), aiding );
+        Acquisition_engine acq( sig->code_samples( 4, CTTC_SNIPPET_FS ), 4, CTTC_SNIPPET_FS, sig->params(), aiding );
         REQUIRE_FALSE( acq.integrate( block ) );
         REQUIRE( acq.result().metric < Acquisition_engine::ACQTH );
     }

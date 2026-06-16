@@ -1,5 +1,7 @@
 #pragma once
+#include <map>
 #include <mutex>
+#include "constellations.h"
 
 // Receiver-wide acquisition aiding: a shared estimate of the common-mode carrier-frequency
 // offset - the receiver clock / local-oscillator error, identical for every satellite on a
@@ -38,11 +40,16 @@ public:
     //   WIDE        - uncentered (0/1 SV): covers the clock offset itself, sized for the grid.
     //   NARROW      - >=2 SV bridge center (known to a couple kHz): ~5 kHz spread + that margin.
     //   VERY_NARROW - PVT center (rigorous): just the ~5 kHz per-SV Doppler spread.
-    // (A genuinely small window needs per-SV Doppler prediction from the almanac, not just the
-    // common clock - that is future work.)
+    //   ALMANAC     - per-SV prediction (set_prediction): the almanac gives this SV's own LOS Doppler to
+    //                 ~Hz and PVT pins the clock, so the window need only cover the prediction error - it
+    //                 collapses to a couple of Doppler bins. NOTE the Doppler STEP is NOT narrowed with it:
+    //                 the step is the FFT bin width (1/T_coh, ~1 kHz for L1CA's 1 ms code) and can't shrink
+    //                 without large zero-padding; the peak's parabolic interpolation already recovers
+    //                 sub-bin Doppler, so a tighter WINDOW (fewer bins) is the real acquisition saving.
     static constexpr double SEARCH_HBAND_WIDE_HZ        = 8000.0;
     static constexpr double SEARCH_HBAND_NARROW_HZ      = 6000.0;
     static constexpr double SEARCH_HBAND_VERY_NARROW_HZ = 5000.0;
+    static constexpr double SEARCH_HBAND_ALMANAC_HZ     = 500.0;
 
     struct Estimate
     {
@@ -50,14 +57,29 @@ public:
         double half_width_hz; // search half-width to use this attempt (WIDE or NARROW)
         int    n;             // satellites contributing to the bridge estimate
         bool   from_pvt;      // true once a PVT clock-drift estimate is set
+        bool   searchable = true; // false only if an almanac prediction says this SV is below the horizon
     };
 
     // Report an acquired satellite's observed Doppler at its carrier. Thread-safe (channels
     // acquire concurrently on the pool); cheap and rare (once per successful acquisition).
     void report( double doppler_hz, double carrier_hz );
 
-    // Recommended recenter + search half-width for a search on carrier_hz. Thread-safe.
+    // Recommended recenter + search half-width for a search on carrier_hz. Thread-safe. The (con,prn)
+    // overload additionally uses the per-SV almanac prediction (set_prediction) when present: it centers
+    // on that SV's predicted line-of-sight Doppler (+ the common clock offset) with a VERY_NARROW window,
+    // and reports searchable=false if the SV is predicted below the horizon. Falls back to the common-mode
+    // estimate when there is no prediction for that SV.
     Estimate estimate( double carrier_hz ) const;
+    Estimate estimate( Constellation con, int prn, double carrier_hz ) const;
+
+    // Per-SV almanac prediction (set by the receiver each PVT tick from the broadcast almanac + the coarse
+    // position/time): is the SV above the horizon, and its predicted LINE-OF-SIGHT Doppler as a fraction of
+    // carrier (df/f, geometry only - the clock offset is added in estimate()). Thread-safe.
+    void set_prediction( Constellation con, int prn, bool above_horizon, double los_doppler_fraction );
+
+    // Whether a search for (con,prn) is worth running now: false only if an almanac prediction places it
+    // below the horizon (an unknown SV stays searchable). Thread-safe; the scheduler consults it.
+    bool searchable( Constellation con, int prn ) const;
 
     // PVT hook: called with the receiver clock drift expressed as a fraction of carrier (df/f).
     // Once set it takes precedence over the satellite-mean bridge.
@@ -71,6 +93,7 @@ public:
         n_                    = 0;
         clock_fraction_       = 0.0;
         clock_fraction_valid_ = false;
+        predictions_.clear();
     }
 
 private:
@@ -79,10 +102,23 @@ private:
     // >=2 SVs use the full mean Doppler; a lone SV uses HALF of it (hedge against that one SV's
     // unknown own-Doppler). Returns 0 when no SV has been reported yet.
     double bridge_fraction_locked() const;
+    // The common-mode estimate (clock bridge / PVT), with the lock already held.
+    Estimate estimate_common_locked( double carrier_hz ) const;
+
+    static int sv_key( Constellation con, int prn )
+    {
+        return static_cast<int>( con ) * 1000 + prn;
+    }
+    struct Prediction
+    {
+        bool   above_horizon = true;
+        double los_fraction  = 0.0; // predicted line-of-sight Doppler / carrier (geometry only)
+    };
 
     mutable std::mutex mu_;
     double             sum_fraction_ = 0.0; // sum of doppler/carrier over acquired SVs (bridge)
     int                n_            = 0;
+    std::map<int, Prediction> predictions_; // per-SV almanac prediction (key = sv_key)
 
     // Rigorous common-mode offset from the PVT clock-drift solution. Unset until PVT.
     double clock_fraction_       = 0.0;

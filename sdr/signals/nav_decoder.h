@@ -1,4 +1,6 @@
 #pragma once
+#include <map>
+#include "almanac.h"
 #include "ephemeris.h"
 #include "ionospheric.h"
 
@@ -28,6 +30,15 @@ public:
 
     virtual const Ephemeris& ephemeris() const = 0; // current ephemeris (valid or not); never null
     virtual const Iono*      iono() const      = 0; // current broadcast iono (valid or not); never null
+
+    // Almanac entries decoded so far (PRN -> coarse orbit), subcommutated over the broadcast. Empty for
+    // decoders that don't decode the almanac (default); GPS L1CA overrides. Constellation-wide, so the
+    // Receiver aggregates these across channels for acquisition aiding.
+    virtual const std::map<int, Gps_almanac>& almanac() const
+    {
+        static const std::map<int, Gps_almanac> empty;
+        return empty;
+    }
 
     virtual int          get_current_bit_index() const = 0;
     virtual int          get_current_ms_tick() const   = 0;

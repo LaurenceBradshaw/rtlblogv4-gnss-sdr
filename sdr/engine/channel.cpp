@@ -31,7 +31,8 @@ Channel::Channel(
       state_( Channel_state::ACQUIRING ),
       next_sample_( 0 ),
       acquisition_(
-          signal.code_samples( satellite_id, sample_rate_hz ), static_cast<double>( sample_rate_hz ), signal.params(), aiding
+          signal.code_samples( satellite_id, sample_rate_hz ), satellite_id, static_cast<double>( sample_rate_hz ),
+          signal.params(), aiding
       ),
       tracking_( signal.make_tracker( satellite_id, static_cast<double>( sample_rate_hz ) ) ),
       navigation_( signal.make_nav_decoder( satellite_id ) ),
@@ -75,6 +76,13 @@ bool Channel::has_pending_work() const
         if( std::chrono::steady_clock::now() < retry_after_ )
         {
             return false; // backing off - not in view, don't burn a worker on it
+        }
+        // Almanac horizon skip: if the broadcast almanac + the current fix place this SV below the horizon,
+        // don't search it at all - just don't schedule the channel. Re-evaluated each poll, so it resumes
+        // the moment the prediction says it has risen. Unknown SVs (no prediction) stay searchable.
+        if( !aiding_.searchable( signal_.params().constellation, static_cast<int>( satellite_id_ ) ) )
+        {
+            return false;
         }
         const Sample_index newest = sample_buffer_.newest_valid_index();
         return newest + 1 >= static_cast<Sample_index>( acq_block() );
@@ -147,7 +155,8 @@ void Channel::publish_snapshot()
     s.iono                 = *navigation_->iono();     // broadcast iono (iono.valid false unless this SV decoded it)
 
     std::lock_guard<std::mutex> lk( snapshot_mutex_ );
-    snapshot_ = s;
+    snapshot_          = s;
+    published_almanac_ = navigation_->almanac(); // publish under the lock; the worker owns navigation_
 }
 
 Channel_snapshot Channel::snapshot() const

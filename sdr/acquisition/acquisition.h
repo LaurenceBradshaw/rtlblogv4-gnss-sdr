@@ -34,8 +34,8 @@ public:
     // sig : signal physics (chip rate sets the exclusion zone; code period sets the
     //       C/N0 normalisation). PRN-independent - shared across this signal's channels.
     // aiding : receiver-wide Doppler-recenter estimate, read at the start of each attempt.
-    Acquisition_engine( const Complex_buf& prn_code, double sample_rate_hz, const Signal_params& sig,
-                        const Acquisition_aiding& aiding );
+    Acquisition_engine( const Complex_buf& prn_code, Satellite_id satellite_id, double sample_rate_hz,
+                        const Signal_params& sig, const Acquisition_aiding& aiding );
     ~Acquisition_engine();
 
     // FFTW plans are not copyable
@@ -81,6 +81,8 @@ private:
     std::vector<double> power_;         // n_ x nfreq_ accumulated correlation power - P in GNSS-SDRLIB
 
     const Acquisition_aiding& aiding_;          // shared receiver-wide recenter estimate
+    Satellite_id              satellite_id_;    // this channel's SV - for the per-SV almanac aiding query
+    Constellation             constellation_;   // this signal's constellation - ditto
     double                    carrier_freq_hz_; // this signal's carrier (Hz) - for the aiding query
     int    doppler_center_bins_; // recenter offset (integer FFT bins), latched per attempt
     int    active_half_bins_;    // searched half-width (bins each side of centre), latched per attempt

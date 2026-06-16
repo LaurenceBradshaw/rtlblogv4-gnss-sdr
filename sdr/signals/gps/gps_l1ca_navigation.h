@@ -1,6 +1,8 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <map>
+#include "almanac.h"
 #include "ephemeris.h"
 #include "ionospheric.h"
 #include "signal.h"
@@ -88,6 +90,14 @@ public:
         return &iono_;
     }
 
+    // Broadcast almanac entries this channel has decoded so far (PRN -> coarse orbit), subcommutated over
+    // SF4/SF5. Constellation-wide, so the engine aggregates these across all channels for acquisition
+    // aiding. Sparse on short captures (the full 25-page set takes ~12.5 min).
+    const std::map<int, Gps_almanac>& almanac() const override
+    {
+        return almanac_;
+    }
+
     // True in the epoch where the loop filter should fire (prm2 mode post-nav-sync).
     // mirrors nav->swloop
     bool sw_loop() const override
@@ -144,7 +154,8 @@ private:
     bool preamble_found_ = false; // flagtow
     int  sf_decoded_     = 0;     // bitmask: bits 0/1/2 = SF1/SF2/SF3 decoded
 
-    Gps_ephemeris eph_current_; // most recently decoded subframe (may be invalid)
-    Gps_ephemeris eph_;         // current ephemeris (valid only if eph_.valid == true and iodc/iode match)
-    Iono      iono_;        // broadcast Klobuchar iono + leap seconds (SF4 page 18)
+    Gps_ephemeris              eph_current_; // most recently decoded subframe (may be invalid)
+    Gps_ephemeris              eph_;         // current ephemeris (valid only if eph_.valid == true and iodc/iode match)
+    Iono                       iono_;        // broadcast Klobuchar iono + leap seconds (SF4 page 18)
+    std::map<int, Gps_almanac> almanac_;     // decoded almanac pages so far (PRN -> coarse orbit)
 };

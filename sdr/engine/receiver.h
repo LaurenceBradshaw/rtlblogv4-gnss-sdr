@@ -103,6 +103,13 @@ public:
     std::optional<Position_solution> latest_position() const;
     // A coherent snapshot of every channel's observable state, one entry per channel.
     std::vector<Channel_snapshot> channel_snapshots() const;
+    // The receiver-wide accumulated GPS almanac (PRN -> coarse orbit), aggregated across all channels and
+    // persisting across the run. For acquisition aiding (Phase 3) and the GUI. Thread-safe copy.
+    std::map<int, Gps_almanac> almanac() const
+    {
+        std::lock_guard<std::mutex> lock( state_mutex_ );
+        return almanac_;
+    }
     // Loop timing/progress for the status bar.
     Receiver_status status() const;
     // Every (constellation, PRN) the receiver searches - available before Start (does not need the
@@ -148,6 +155,9 @@ private:
     void setup();               // construct device/buffer/signals/channels/pool/scheduler
     void teardown();            // tear them down in dependency order
     void enumerate_configured_sats(); // fill configured_sats_ from signal_selection_ (+ PRN filters)
+    // From a coarse fix + the decoded almanac, predict each configured SV's visibility + LOS Doppler and
+    // push them to aiding_ (so acquisition can skip below-horizon SVs and tightly window the rest).
+    void update_acquisition_predictions( const Position_solution& fix );
     void publish_histories();   // run-loop helper: copy subscribed channels' history to the published map
     void freeze_histories();    // at EOF: snapshot ALL data-having channels so graphs keep their last state
     void clear_published_state(); // reset the GUI-visible published state (on Stop / fresh Start)
@@ -183,6 +193,7 @@ private:
     std::optional<Position_solution> latest_position_;
     std::vector<Channel_snapshot>    latest_snapshots_;
     Receiver_status                  latest_status_;
+    std::map<int, Gps_almanac>       almanac_; // receiver-wide accumulated almanac (PRN -> coarse orbit)
 
     // History subscriptions + published copies (guarded by state_mutex_; mutable for the const API).
     // Subscriptions are REFERENCE-COUNTED per SV key: several graph windows can watch the same SV, so a
