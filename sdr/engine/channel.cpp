@@ -130,6 +130,8 @@ void Channel::publish_snapshot()
     Channel_snapshot s;
     s.satellite_id         = satellite_id_;
     s.constellation        = navigation_->ephemeris().constellation;
+    s.code                 = signal_.params().code;
+    s.band                 = signal_.params().band;
     s.has_observable       = has_observable();
     s.next_sample          = next_sample_.load( std::memory_order_relaxed );
     s.transmission_time_s  = current_transmission_time_s();

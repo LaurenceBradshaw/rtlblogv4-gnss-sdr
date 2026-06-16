@@ -30,6 +30,8 @@ struct Channel_snapshot
 {
     Satellite_id  satellite_id   = 0;
     Constellation constellation  = Constellation::Unknown; // set from the channel on publish
+    Code          code           = Code::CA;               // signal component (e.g. GPS L1CA vs L1Cd)
+    Band          band           = Band::L1;               // RF band - so (con,sv) dedup can pick one component
     bool          has_observable = false;                  // valid ephemeris + TOW anchored at snapshot time
 
     Channel_state state     = Channel_state::IDLE; // acquisition / tracking lifecycle stage

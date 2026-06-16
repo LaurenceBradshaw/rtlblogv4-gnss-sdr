@@ -1,4 +1,6 @@
 #include "observation.h"
+#include <map>
+#include <utility>
 #include "atmosphere.h"
 #include "geodesy.h"
 #include "logging.h"
@@ -70,17 +72,55 @@ void Observation_engine::generate(
     double t_rx_gps_tow_s  = t_rx_common_s + master_clock_offset_s_;
     last_reception_time_s_ = t_rx_gps_tow_s;
 
+    // De-duplicate: a satellite tracked on two components (e.g. GPS L1CA + L1Cd) must contribute ONE row
+    // to PVT, not two. Group the eligible snapshots by (constellation, satellite_id) and keep one per SV.
+    // A snapshot is eligible only if it can produce an observable (valid ephemeris + anchored TOW) AND is
+    // carrier-locked - gating on lock (the standard gnss-sdr policy) keeps a cycle-slipping / fading
+    // channel's corrupted range + range-rate out of the EKF; the lock detector's hysteresis means a brief
+    // dip won't drop a healthy SV. (Cross-correlation false tracks keep a real carrier, so they still pass
+    // here - the frame-sync timeout is what evicts those.)
+    //
+    // Selection is by a FIXED component priority, NOT C/N0. C/N0 is not comparable across components: the
+    // M2M4 estimator saturates at high per-epoch SNR, and a component's per-epoch SNR scales with its
+    // coherent integration, so GPS L1Cd (10 ms code) reads a flat ~38 dB-Hz regardless of true strength
+    // while L1CA (1 ms) reads its true 41-46 (verified same-SV: CA-Cd gap 3-8 dB, Cd flat across SVs).
+    // Comparing those magnitudes would unfairly favour L1CA. So pick deterministically by code_rank and let
+    // the has_observable && has_lock gate handle failover: the preferred component is used whenever it is
+    // healthy, else the other carries the SV. The M2 fix made the per-component transmit times agree, so
+    // the choice - and failover - is measurement-consistent. (A high-SNR-robust C/N0 estimator could later
+    // restore quality-weighted selection; see the multi-code-fusion backlog.)
+    auto code_rank = []( Code c )
+    {
+        // higher = preferred; only same-constellation codes ever compete here
+        switch( c )
+        {
+        case Code::CA:
+            return 1; // GPS L1 C/A - proven + carries the broadcast iono (primary)
+        case Code::Cd:
+            return 2; // GPS L1Cd - BOC pilot, used when L1CA is unavailable for the SV
+        default:
+            return 0; // Galileo E1-B / BeiDou B1I - no sibling code competes yet
+        }
+    };
+
+    std::map<std::pair<Constellation, Satellite_id>, const Channel_snapshot*> best;
     for( const Channel_snapshot& s : snaps )
     {
-        // Use a satellite only if it can produce an observable (valid ephemeris + anchored TOW) AND
-        // is currently carrier-locked. Gating on lock (the standard gnss-sdr policy) keeps a cycle-
-        // slipping / fading channel's corrupted range + range-rate out of the EKF; the lock detector's
-        // hysteresis means a brief dip won't drop a healthy SV. (Cross-correlation false tracks keep a
-        // real carrier, so they still pass here - the frame-sync timeout is what evicts those.)
         if( !s.has_observable || !s.has_lock )
         {
             continue;
         }
+        const auto key = std::make_pair( s.constellation, s.satellite_id );
+        const auto it  = best.find( key );
+        if( it == best.end() || code_rank( s.code ) > code_rank( it->second->code ) )
+        {
+            best[key] = &s;
+        }
+    }
+
+    for( const auto& [key, winner] : best )
+    {
+        const Channel_snapshot& s = *winner;
 
         Satellite_measurement m;
         m.satellite_id  = s.satellite_id;
