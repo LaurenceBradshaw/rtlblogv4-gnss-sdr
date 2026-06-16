@@ -525,7 +525,13 @@ void Gps_l1ca_decoder::decode_subframe()
         if( eph_current_.valid && tow_confirmed_ && ( eph_current_.iodc & 0xFF ) == eph_current_.iode )
         {
             eph_ = eph_current_;
-            active_eph_tow_anchor_epoch_ = epoch_count_;
+            // epoch_count_ is incremented at the END of process() (the ++ below the decode call), but the
+            // channel reads ms_since_tow_update() = epoch_count_ - this_anchor AFTER process() returns, i.e.
+            // with the post-increment value. Anchor to epoch_count_ + 1 so it matches that convention; else
+            // every L1CA transmit time is one epoch (1 ms) high. Invisible to L1CA-only PVT (a common bias
+            // absorbed into the clock state) but a 300 km inconsistency when combined with L1C for the same
+            // SV. (L1C's decoder ++s epoch_count_ at the TOP of its process(), so it has no such skew.)
+            active_eph_tow_anchor_epoch_ = epoch_count_ + 1;
         }
     }
 
