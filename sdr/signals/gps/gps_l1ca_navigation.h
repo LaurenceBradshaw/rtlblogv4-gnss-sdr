@@ -93,7 +93,7 @@ public:
     // Broadcast almanac entries this channel has decoded so far (PRN -> coarse orbit), subcommutated over
     // SF4/SF5. Constellation-wide, so the engine aggregates these across all channels for acquisition
     // aiding. Sparse on short captures (the full 25-page set takes ~12.5 min).
-    const std::map<int, Gps_almanac>& almanac() const override
+    const std::map<int, Almanac>& almanac() const override
     {
         return almanac_;
     }
@@ -157,5 +157,5 @@ private:
     Gps_ephemeris              eph_current_; // most recently decoded subframe (may be invalid)
     Gps_ephemeris              eph_;         // current ephemeris (valid only if eph_.valid == true and iodc/iode match)
     Iono                       iono_;        // broadcast Klobuchar iono + leap seconds (SF4 page 18)
-    std::map<int, Gps_almanac> almanac_;     // decoded almanac pages so far (PRN -> coarse orbit)
+    std::map<int, Almanac> almanac_;     // decoded almanac pages so far (PRN -> coarse orbit)
 };

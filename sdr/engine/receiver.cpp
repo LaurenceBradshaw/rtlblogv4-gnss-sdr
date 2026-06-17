@@ -67,27 +67,25 @@ void Receiver::enumerate_configured_sats()
 
 void Receiver::update_acquisition_predictions( const Position_solution& fix )
 {
-    // GPS almanac only for now. The receiver-wide almanac_ was just refreshed on this same (run) thread,
-    // so reading it here without the lock is safe (the lock only guards GUI readers).
-    constexpr double C        = 299792458.0;
-    constexpr double EL_MASK  = -2.0 * 3.14159265358979 / 180.0; // skip only SVs clearly below the horizon
+    // Any constellation that has an almanac (GPS today; Galileo/BeiDou once their almanac decode lands).
+    // The receiver-wide almanac_ was just refreshed on this same (run) thread, so reading it here without
+    // the lock is safe (the lock only guards GUI readers).
+    constexpr double C       = 299792458.0;
+    constexpr double EL_MASK = -2.0 * 3.14159265358979 / 180.0; // skip only SVs clearly below the horizon
     const Ecef       user { fix.ecef_x_m, fix.ecef_y_m, fix.ecef_z_m };
-    const double     t = obs_engine_.reception_time_s(); // current GPS time of week (s)
+    const double     t = obs_engine_.reception_time_s(); // current GPS time of week (~GST for Galileo - the
+                                                         // few-ns GGTO is negligible for coarse prediction)
 
     for( const Configured_satellite& sat : configured_sats_ )
     {
-        if( sat.constellation != Constellation::Gps )
-        {
-            continue;
-        }
-        const auto it = almanac_.find( sat.prn );
+        const auto it = almanac_.find( sv_key( sat.constellation, sat.prn ) );
         if( it == almanac_.end() || !it->second.valid )
         {
             continue; // no almanac for this SV yet -> leave it searchable / common-mode aided
         }
-        const Ephemeris eph = it->second.as_ephemeris();
-        const Ecef      sp  = orbit::satellite_ecef_pos( eph, t, Constellation::Gps );
-        const Ecef      sv  = orbit::satellite_ecef_vel( eph, t, Constellation::Gps );
+        const Ephemeris eph = it->second.as_ephemeris(); // carries the constellation -> orbit uses its mu
+        const Ecef      sp  = orbit::satellite_ecef_pos( eph, t, sat.constellation );
+        const Ecef      sv  = orbit::satellite_ecef_vel( eph, t, sat.constellation );
         double          el = 0.0, az = 0.0;
         look_angles( user, sp, el, az );
         // Predicted line-of-sight Doppler as a fraction of carrier: range-rate = sat_vel . LOS (static rx),
@@ -95,7 +93,7 @@ void Receiver::update_acquisition_predictions( const Position_solution& fix )
         const double dx = sp.x - user.x, dy = sp.y - user.y, dz = sp.z - user.z;
         const double r  = std::sqrt( dx * dx + dy * dy + dz * dz );
         const double rr = ( r > 0.0 ) ? ( sv.x * dx + sv.y * dy + sv.z * dz ) / r : 0.0;
-        aiding_.set_prediction( Constellation::Gps, sat.prn, el > EL_MASK, -rr / C );
+        aiding_.set_prediction( sat.constellation, sat.prn, el > EL_MASK, -rr / C );
     }
 }
 
@@ -159,6 +157,8 @@ void Receiver::setup()
     std::string source_desc;
     if( config_.use_rtlsdr )
     {
+        device_.reset(); // close any prior handle BEFORE re-opening (rtlsdr_open can't claim a busy device);
+                         // teardown() already does this on a clean Stop, but be robust to a setup re-entry
         auto rtl = std::make_unique<Rtlsdr_device>( config_.device_index );
         rtl->set_sample_rate_hz( native_rate );
         rtl->set_centre_freq_hz( GNSS_L1_HZ );
@@ -249,6 +249,9 @@ void Receiver::teardown()
     {
         device_->stop_streaming();
     }
+    device_.reset();    // RELEASE the device (RTL-SDR: stop_streaming in the dtor, then rtlsdr_close) so a
+                        // restart can re-open it - an exclusive USB device can't be opened while the old
+                        // handle is still held, which made Start->Stop->Start error on the RTL-SDR source.
     decimator_.reset(); // safe now: the streaming thread (its only user) has stopped
     scheduler_.reset();
     pool_.reset();
@@ -326,13 +329,15 @@ void Receiver::run()
         {
             std::vector<Channel_snapshot> snaps;
             snaps.reserve( channel_ptrs_.size() );
-            std::map<int, Gps_almanac> alm_updates; // gathered outside state_mutex_ (uses snapshot_mutex_)
+            std::map<int, Almanac> alm_updates; // gathered outside state_mutex_ (uses snapshot_mutex_)
             for( Channel* ch : channel_ptrs_ )
             {
                 snaps.push_back( ch->snapshot() );
+                // Key by sv_key(constellation, prn) - the receiver-wide almanac spans all constellations
+                // (a channel's per-decoder map is keyed by PRN within its own constellation).
                 for( const auto& [prn, a] : ch->almanac_snapshot() )
                 {
-                    alm_updates[prn] = a; // any channel's copy of an SV's almanac is the same broadcast data
+                    alm_updates[sv_key( a.constellation, prn )] = a;
                 }
             }
             std::lock_guard<std::mutex> lock( state_mutex_ );
@@ -341,9 +346,9 @@ void Receiver::run()
             latest_status_    = status;
             // Receiver-wide almanac: accumulate (never drop), so an SV's coarse orbit persists for
             // acquisition aiding even after the channel that decoded it stops tracking.
-            for( const auto& [prn, a] : alm_updates )
+            for( const auto& [key, a] : alm_updates )
             {
-                almanac_[prn] = a;
+                almanac_[key] = a;
             }
         }
 

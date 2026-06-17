@@ -34,9 +34,9 @@ public:
     // Almanac entries decoded so far (PRN -> coarse orbit), subcommutated over the broadcast. Empty for
     // decoders that don't decode the almanac (default); GPS L1CA overrides. Constellation-wide, so the
     // Receiver aggregates these across channels for acquisition aiding.
-    virtual const std::map<int, Gps_almanac>& almanac() const
+    virtual const std::map<int, Almanac>& almanac() const
     {
-        static const std::map<int, Gps_almanac> empty;
+        static const std::map<int, Almanac> empty;
         return empty;
     }
 

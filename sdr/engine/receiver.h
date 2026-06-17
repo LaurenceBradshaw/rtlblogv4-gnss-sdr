@@ -103,9 +103,9 @@ public:
     std::optional<Position_solution> latest_position() const;
     // A coherent snapshot of every channel's observable state, one entry per channel.
     std::vector<Channel_snapshot> channel_snapshots() const;
-    // The receiver-wide accumulated GPS almanac (PRN -> coarse orbit), aggregated across all channels and
+    // The receiver-wide accumulated almanac (sv_key(con,prn) -> coarse orbit), aggregated across all channels and
     // persisting across the run. For acquisition aiding (Phase 3) and the GUI. Thread-safe copy.
-    std::map<int, Gps_almanac> almanac() const
+    std::map<int, Almanac> almanac() const
     {
         std::lock_guard<std::mutex> lock( state_mutex_ );
         return almanac_;
@@ -164,9 +164,9 @@ private:
 
     static int history_key( Constellation constellation, int prn, Code code )
     {
-        // (constellation, prn) * 10 + code: Code has < 10 values, so this stays collision-free and keeps
-        // the two codes of one SV (e.g. GPS L1CA / L1C) on distinct keys.
-        return ( static_cast<int>( constellation ) * 1000 + prn ) * 10 + static_cast<int>( code );
+        // sv_key * 10 + code: Code has < 10 values, so this stays collision-free and keeps the two codes
+        // of one SV (e.g. GPS L1CA / L1C) on distinct keys.
+        return sv_key( constellation, prn ) * 10 + static_cast<int>( code );
     }
 
     Receiver_config                   config_;
@@ -193,7 +193,7 @@ private:
     std::optional<Position_solution> latest_position_;
     std::vector<Channel_snapshot>    latest_snapshots_;
     Receiver_status                  latest_status_;
-    std::map<int, Gps_almanac>       almanac_; // receiver-wide accumulated almanac (PRN -> coarse orbit)
+    std::map<int, Almanac>       almanac_; // receiver-wide accumulated almanac (sv_key(con,prn) -> coarse orbit)
 
     // History subscriptions + published copies (guarded by state_mutex_; mutable for the const API).
     // Subscriptions are REFERENCE-COUNTED per SV key: several graph windows can watch the same SV, so a

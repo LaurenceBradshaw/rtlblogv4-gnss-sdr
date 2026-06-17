@@ -10,7 +10,8 @@ void Observation_engine::generate(
 )
 {
     const double c                    = 299792458.0; // speed of light in m/s
-    const double EARTH_ROTATION_SPEED = 7.292115e-5; // rad/s
+    const double EARTH_ROTATION_SPEED = 7.2921151467e-5; // rad/s (matches orbit.cpp's OMEGA_E_DOT - was a
+                                                         // truncated 7.292115e-5, a ~1.5e-7 inconsistency)
     measurements_.clear();
 
     // Take ONE coherent snapshot per channel up front (the owning workers publish these); every read

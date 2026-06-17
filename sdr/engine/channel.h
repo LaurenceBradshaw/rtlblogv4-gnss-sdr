@@ -152,7 +152,7 @@ public:
     // Thread-safe copy of the almanac entries this channel's decoder has gathered (PRN -> coarse orbit).
     // Published under snapshot_mutex_ by the owning worker (in publish_snapshot); the Receiver aggregates
     // these across channels for acquisition aiding. Constellation-wide (any tracked SV fills it in).
-    std::map<int, Gps_almanac> almanac_snapshot() const
+    std::map<int, Almanac> almanac_snapshot() const
     {
         std::lock_guard<std::mutex> lk( snapshot_mutex_ );
         return published_almanac_;
@@ -218,6 +218,6 @@ private:
     // threads (snapshot()). A mutex - not a lock-free seqlock - because publish/read are infrequent
     // (per quantum / per tick) and brief (a small struct copy), so contention is negligible.
     Channel_snapshot           snapshot_;
-    std::map<int, Gps_almanac> published_almanac_; // decoded almanac, published under snapshot_mutex_
+    std::map<int, Almanac> published_almanac_; // decoded almanac, published under snapshot_mutex_
     mutable std::mutex         snapshot_mutex_;
 };

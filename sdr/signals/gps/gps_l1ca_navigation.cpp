@@ -201,7 +201,7 @@ static void decode_sf4( const uint8_t* buf, Iono& iono )
 // 6 parity bits per 30-bit word, so words start every 30 bits); field order + scales mirror RTKLIB
 // decode_alm_sat(). `week` is the current GPS week (from the decoded ephemeris) - the almanac page carries
 // only toa-within-week. Returns the PRN (and fills alm[prn]) if this was an almanac page, else 0.
-static int decode_almanac( const uint8_t* buf, int sfn, int week, std::map<int, Gps_almanac>& alm )
+static int decode_almanac( const uint8_t* buf, int sfn, int week, std::map<int, Almanac>& alm )
 {
     const int  svid        = static_cast<int>( getbitu( buf, 62, 6 ) ); // page SV ID (== the PRN for almanac pages)
     const bool is_alm_page = ( sfn == 5 && svid >= 1 && svid <= 24 ) || ( sfn == 4 && svid >= 25 && svid <= 32 );
@@ -210,8 +210,9 @@ static int decode_almanac( const uint8_t* buf, int sfn, int week, std::map<int, 
         return 0; // iono (p18), health/config (p25), or a reserved page
     }
 
-    Gps_almanac a;
-    a.prn      = static_cast<Satellite_id>( svid );
+    Almanac a;
+    a.constellation = Constellation::Gps;
+    a.prn           = static_cast<Satellite_id>( svid );
     a.e        = getbitu( buf, 68, 16 ) * P2_21;
     a.toa      = getbitu( buf, 90, 8 ) * 4096.0;                    // 2^12
     a.i0       = ( 0.3 + getbits( buf, 98, 16 ) * P2_19 ) * SC2RAD; // 0.3 semicircles reference + delta_i
@@ -559,7 +560,7 @@ void Gps_l1ca_decoder::decode_subframe()
         {
             if( almanac_.size() > known_before ) // log once per newly-known SV (pages re-decode every cycle)
             {
-                const Gps_almanac& a = almanac_[aprn];
+                const Almanac& a = almanac_[aprn];
                 logging::log(
                     logging::Level::Info,
                     fmt::format(

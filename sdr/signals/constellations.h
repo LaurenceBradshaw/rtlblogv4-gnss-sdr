@@ -14,6 +14,14 @@ enum class Constellation
 
 constexpr int NUM_CONSTELLATIONS = 3; // real constellations (Gps..Beidou); excludes Unknown
 
+// A single integer identifying a satellite across constellations (constellation * 1000 + PRN). Used to
+// key per-SV maps (acquisition predictions, GUI rows, graph history, ...). Per-CODE keys build on this as
+// sv_key(con,prn) * 10 + code (Code has < 10 values; that *10 is kept where Code is in scope).
+inline int sv_key( Constellation c, int prn )
+{
+    return static_cast<int>( c ) * 1000 + prn;
+}
+
 // Human-readable constellation name (for logs + the GUI).
 inline const char* constellation_name( Constellation c )
 {

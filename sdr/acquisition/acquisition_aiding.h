@@ -105,10 +105,6 @@ private:
     // The common-mode estimate (clock bridge / PVT), with the lock already held.
     Estimate estimate_common_locked( double carrier_hz ) const;
 
-    static int sv_key( Constellation con, int prn )
-    {
-        return static_cast<int>( con ) * 1000 + prn;
-    }
     struct Prediction
     {
         bool   above_horizon = true;

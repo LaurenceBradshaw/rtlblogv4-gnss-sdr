@@ -54,7 +54,7 @@ Satellite_list_widget::Satellite_list_widget( const Receiver& receiver, QWidget*
 
 int Satellite_list_widget::key_of( Constellation constellation, int prn, Code code )
 {
-    return ( static_cast<int>( constellation ) * 1000 + prn ) * 10 + static_cast<int>( code );
+    return sv_key( constellation, prn ) * 10 + static_cast<int>( code ); // sv_key from constellations.h
 }
 
 void Satellite_list_widget::update_frame( const Gui_frame& frame )
