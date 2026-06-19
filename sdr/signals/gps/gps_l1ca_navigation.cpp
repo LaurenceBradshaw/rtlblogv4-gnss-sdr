@@ -311,6 +311,9 @@ void Gps_l1ca_decoder::process( double prompt_i, double prompt_i_prev )
         }
     }
 
+    // NOTE: epoch_count_ is incremented at the END of process() here (L1C does it at the TOP). This
+    // asymmetry is load-bearing: ms_since_tow_update() is read by the Channel AFTER process() returns, so
+    // the eph TOW anchor uses epoch_count_+1 (see parse in decode_subframe) to match. Keep them in sync.
     ++epoch_count_;
 }
 

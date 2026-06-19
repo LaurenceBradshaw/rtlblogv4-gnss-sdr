@@ -79,7 +79,10 @@ public:
     // healthy) yet never frame-sync; the frame-sync timeout (Channel) is what recovers those.
     static constexpr int    CN0_WINDOW_EPOCHS       = 100;  // per estimate (GPS 100 ms, Galileo 400 ms)
     static constexpr double CN0_LOCK_THRESHOLD_DBHZ = 28.0; // below this = lost lock / noise
-    static constexpr double CARRIER_LOCK_THRESHOLD  = 0.8;  // cos(2*phi) gate (~phi < 30 deg)
+    static constexpr double CARRIER_LOCK_THRESHOLD  = 0.7;  // cos(2*phi) gate (~phi < 23 deg); relaxed
+                                                            // from 0.8 (~18 deg) - too strict for marginal
+                                                            // low-C/N0 field signals (RTL-SDR), flapped the
+                                                            // indicator without genuine carrier loss.
     static constexpr int    LOCK_FAIL_WINDOWS       = 20;   // consecutive bad windows before loss of lock
 
     // code_chips: raw +/-1 float chip values from Signal::code_chips()
@@ -103,6 +106,9 @@ public:
     // Initialise tracking state from acquisition result.
     // mirrors: sdr->trk.carrfreq = acq.acqfreq; sdr->trk.codefreq = sdr->crate
     void initialise( const Acquisition_result& acq ) override;
+
+    // Re-center the carrier NCO on an external PHYSICAL Doppler (cross-code/-frequency aiding).
+    void steer_carrier_doppler( double doppler_hz ) override;
 
     // Samples needed for the next epoch.
     // mirrors: samples_consumed = (clen - remcode) / (codefreq / f_sf)
@@ -128,6 +134,7 @@ public:
     }
 
     double get_fractional_chip_time() const override;
+    double code_phase_offset_s() const override;
 
     double get_code_freq() const override
     {

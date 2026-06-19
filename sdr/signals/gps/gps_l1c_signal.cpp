@@ -13,7 +13,7 @@ const Signal_params Gps_l1c_signal::params_ = {
     /* code_length_chips */ gps::L1cp_code::PRIMARY_CHIPS, // 10230 ranging chips
     /* code_period_s     */ gps::L1cp_code::PERIOD_TIME,   // 10 ms
     /* nav_bit_ms        */ 10,                            // CNAV-2: 100 sym/s -> 10 ms/symbol (= one code period)
-    /* modulation        */ Modulation::Boc11,            // BOC(1,1) approximation of TMBOC(6,1,4/33)
+    /* modulation        */ Modulation::Tmboc,            // TMBOC(6,1,4/33); BOC(1,1) replica today (4/33 BOC(6,1) chips need handling)
     /* acq_integrations  */ 3,  // 10 ms code -> ~10 dB/epoch, few epochs needed
     /* acq_fft_factor    */ 1,  // single-period circular FFT (the 10 ms code is long; halves cost)
     // Tuned for the 10 ms epoch (gnss-sdr has no L1C; values bracketed from its E1 4 ms / L2C 20 ms sets

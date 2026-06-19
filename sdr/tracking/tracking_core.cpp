@@ -150,6 +150,21 @@ void Tracking_core::initialise( const Acquisition_result& acq )
     oldsum_Q_.fill( 0.0 );
 }
 
+void Tracking_core::steer_carrier_doppler( double doppler_hz )
+{
+    // doppler_hz is the PHYSICAL Doppler (acquisition / aiding convention); negate at hand-off exactly as
+    // initialise() does (conj wipe). Re-center the carrier baseline and zero the loop integrators so the PLL
+    // pulls in cleanly from the aided frequency. The code NCO is carrier-aided (code_freq_ uses carrier_freq_),
+    // so it follows automatically; code phase / lock-detector / secondary-sync state are deliberately left
+    // intact (this only redirects the carrier frequency, it is not a full re-acquire).
+    acq_freq_     = -doppler_hz;
+    carrier_freq_ = -doppler_hz;
+    carrier_nco_  = 0.0;
+    carrier_acc_  = 0.0;
+    carrier_err_  = 0.0;
+    freq_err_     = 0.0;
+}
+
 // compute_nsamp
 // mirrors: sdr->samples_consumed = (int)((sdr->clen - sdr->trk.remcode) / (sdr->trk.codefreq / sdr->f_sf))
 int Tracking_core::compute_samples_needed() const
@@ -591,6 +606,15 @@ double Tracking_core::get_fractional_chip_time() const
     double chips_passed = static_cast<double>( code_len_ ) - remaining_code_;
 
     return chips_passed / code_rate_;
+}
+
+double Tracking_core::code_phase_offset_s() const
+{
+    // remaining_code_ is the replica code phase at next_sample (kept in (-ci, 0] by the correlate wrap):
+    // the sub-sample offset of next_sample from the code-period boundary. /code_rate_ -> seconds. Adding
+    // this to the whole-epoch transmission time makes t_tx track the boundary instead of quantising to the
+    // nearest whole sample (the +/-0.5-sample sawtooth, std = sample/sqrt(12) ~ 42 m at 2 MHz).
+    return remaining_code_ / code_rate_;
 }
 
 // advance_secondary_sync

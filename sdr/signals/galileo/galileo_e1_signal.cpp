@@ -13,7 +13,7 @@ const Signal_params Galileo_e1_signal::params_ = {
     /* code_length_chips */ galileo::E1c_code::PRIMARY_CHIPS, // 4092 ranging chips (single source of truth)
     /* code_period_s     */ galileo::E1c_code::PERIOD_TIME,   // 4 ms
     /* nav_bit_ms        */ 4,                                // I/NAV 250 sym/s -> 4 ms/symbol (E1-B data)
-    /* modulation        */ Modulation::Boc11,
+    /* modulation        */ Modulation::Cboc, // CBOC(6,1,1/11); BOC(1,1) replica (BOC(6,1) beyond Nyquist)
     /* acq_integrations  */ 4, // 4 ms code -> ~6 dB/epoch, fewer epochs needed
     /* acq_fft_factor    */ 1, // single-period circular FFT (4x cheaper/call)
     /* loop_bw_wide      */ { 5.0, 30.0, 200.0 }, // {dll,pll,fll} Costas+strong-FLL pull-in (atan FLL)

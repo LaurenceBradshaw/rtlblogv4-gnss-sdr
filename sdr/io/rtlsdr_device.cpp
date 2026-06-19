@@ -72,6 +72,16 @@ uint32_t Rtlsdr_device::sample_rate_hz() const
     return rtlsdr_get_sample_rate( reinterpret_cast<rtlsdr_dev_t*>( dev_ ) );
 }
 
+uint32_t Rtlsdr_device::centre_freq_hz() const
+{
+    return rtlsdr_get_center_freq( reinterpret_cast<rtlsdr_dev_t*>( dev_ ) );
+}
+
+int Rtlsdr_device::tuner_gain_tenths_db() const
+{
+    return rtlsdr_get_tuner_gain( reinterpret_cast<rtlsdr_dev_t*>( dev_ ) );
+}
+
 uint64_t Rtlsdr_device::samples_consumed() const
 {
     return samples_consumed_.load( std::memory_order_relaxed );

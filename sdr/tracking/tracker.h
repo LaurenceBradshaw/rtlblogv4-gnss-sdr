@@ -25,6 +25,11 @@ public:
     // Initialise carrier/code NCOs from an acquisition result.
     virtual void initialise( const Acquisition_result& acq ) = 0;
 
+    // Re-center the carrier NCO on an externally supplied PHYSICAL Doppler (Hz) - e.g. a locked sibling
+    // channel's measured Doppler for the same SV (cross-code / cross-frequency tracking aiding). Zeroes the
+    // carrier loop integrators so it pulls in cleanly from the new center; the carrier-aided code NCO follows.
+    virtual void steer_carrier_doppler( double doppler_hz ) = 0;
+
     // Samples the next epoch needs (one code period at the current code frequency).
     virtual int compute_samples_needed() const = 0;
 
@@ -38,6 +43,12 @@ public:
     virtual double get_cn0_db_hz() const = 0; // live tracking C/N0 (M2M4); 0 until the first window
 
     virtual double get_fractional_chip_time() const = 0;
+
+    // Sub-sample offset (s) of next_sample from the current code-period boundary - the live code-NCO
+    // residual. ADD to the whole-epoch transmission time to track out the +/-0.5-sample (~tens of m)
+    // sawtooth that the whole-sample next_sample anchor otherwise leaves. (Piece 1 of sub-sample t_tx;
+    // removes JITTER. A per-channel acquisition rounding BIAS remains until the acq seed is added.)
+    virtual double code_phase_offset_s() const = 0;
 
     virtual double get_code_freq() const            = 0;
     virtual double get_carrier_doppler_hz() const   = 0;

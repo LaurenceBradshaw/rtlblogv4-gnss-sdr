@@ -1,4 +1,7 @@
 #include "observation.h"
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <utility>
 #include "atmosphere.h"
@@ -72,6 +75,50 @@ void Observation_engine::generate(
 
     double t_rx_gps_tow_s  = t_rx_common_s + master_clock_offset_s_;
     last_reception_time_s_ = t_rx_gps_tow_s;
+
+    // TRUTH-RESIDUAL HARNESS (env TRUTH_LLH="lat_deg,lon_deg,alt_m"): validate per-SV observables against a
+    // KNOWN static position (no EKF, clock-independent). Per snapshot (PRE-dedup, so per-code) it logs
+    // resid = pseudorange - true_geometric_range = c*rx_clock (common) + per-SV ranging error; the offline
+    // analyzer (tools/truth_residuals.py) removes the per-epoch common term (median) -> per-SV bias+jitter.
+    // This is the metric for any observable work (sub-sample DLL, code biases) - NOT the +/-150 m EKF position.
+    if( const char* truth_env = std::getenv( "TRUTH_LLH" ) )
+    {
+        double lat_deg = 0.0, lon_deg = 0.0, h_m = 0.0;
+        if( std::sscanf( truth_env, "%lf,%lf,%lf", &lat_deg, &lon_deg, &h_m ) == 3 )
+        {
+            const double lat = lat_deg * M_PI / 180.0, lon = lon_deg * M_PI / 180.0;
+            const double f = 1.0 / 298.257223563, e2 = f * ( 2.0 - f ), a = 6378137.0; // WGS-84
+            const double N = a / std::sqrt( 1.0 - e2 * std::sin( lat ) * std::sin( lat ) );
+            const Ecef   rx { ( N + h_m ) * std::cos( lat ) * std::cos( lon ),
+                              ( N + h_m ) * std::cos( lat ) * std::sin( lon ),
+                              ( N * ( 1.0 - e2 ) + h_m ) * std::sin( lat ) };
+            for( const Channel_snapshot& s : snaps )
+            {
+                if( !s.has_observable || !s.has_lock )
+                {
+                    continue;
+                }
+                const Constellation con     = s.constellation;
+                const double        t_tx    = s.transmit_time_at( rx_sample, sample_rate_hz );
+                const double        transit = t_rx_gps_tow_s - t_tx;
+                const Ecef          sv      = orbit::satellite_ecef_pos( s.eph, t_tx, con );
+                const double        cs = std::cos( EARTH_ROTATION_SPEED * transit ), sn = std::sin( EARTH_ROTATION_SPEED * transit );
+                const Ecef          svr { sv.x * cs + sv.y * sn, -sv.x * sn + sv.y * cs, sv.z }; // Sagnac to rx epoch
+                const double        range = std::sqrt( ( svr.x - rx.x ) * ( svr.x - rx.x ) + ( svr.y - rx.y ) * ( svr.y - rx.y )
+                                                       + ( svr.z - rx.z ) * ( svr.z - rx.z ) );
+                const double        sv_clk = orbit::satellite_clock_offset( s.eph, t_tx, con );
+                const double        resid  = transit * c + sv_clk * c - range; // c*rx_clock + per-SV error
+                logging::log(
+                    logging::Level::Info,
+                    fmt::format(
+                        "TRUTHDIAG rx={} con={} prn={:2d} code={} resid={:.3f} range={:.1f}",
+                        static_cast<uint64_t>( rx_sample ), static_cast<int>( con ), static_cast<int>( s.satellite_id ),
+                        static_cast<int>( s.code ), resid, range
+                    )
+                );
+            }
+        }
+    }
 
     // De-duplicate: a satellite tracked on two components (e.g. GPS L1CA + L1Cd) must contribute ONE row
     // to PVT, not two. Group the eligible snapshots by (constellation, satellite_id) and keep one per SV.

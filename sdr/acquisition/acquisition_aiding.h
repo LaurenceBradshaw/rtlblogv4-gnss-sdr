@@ -30,6 +30,20 @@
 //
 // The offset is stored as a FRACTION of carrier (LO error is ~proportional to carrier), so it
 // is band-agnostic: report and query with the channel's own carrier frequency.
+//
+// SINGLE-BAND ASSUMPTION (revisit for dual-band). The df/f trick holds today because the receiver is
+// SINGLE-BAND: one front-end, one LO, one sample clock, so the fractional clock error is shared by every
+// signal. True simultaneous DUAL-BAND (e.g. L1 + L5) needs SEPARATE RF front-ends (one tuner cannot cover
+// two far-apart bands at once), each delivering its OWN sample stream - so the receiver would read TWO+ IQ
+// sources into TWO+ Sample_buffers (one per band/rate) and run each band's channels off its own buffer.
+// Whether df/f still transfers a Doppler across bands then depends on the clock:
+//   * shared reference oscillator (proper multi-band design): the band LOs differ in frequency but their
+//     fractional error is common -> df/f holds, no change needed.
+//   * independent front-ends (e.g. two RTL-SDR dongles): each has its own free-running LO -> the fractional
+//     clock error differs per band -> the CLOCK part of df/f breaks (the geometric LOS part always scales
+//     with carrier, so that still transfers). An inter-front-end clock offset would have to be estimated
+//     and removed - analogous to the PVT inter-system bias.
+// The cross-code/-frequency per-SV measured Doppler below (report_sv_doppler) inherits exactly this caveat.
 class Acquisition_aiding
 {
 public:
@@ -65,10 +79,12 @@ public:
     void report( double doppler_hz, double carrier_hz );
 
     // Recommended recenter + search half-width for a search on carrier_hz. Thread-safe. The (con,prn)
-    // overload additionally uses the per-SV almanac prediction (set_prediction) when present: it centers
-    // on that SV's predicted line-of-sight Doppler (+ the common clock offset) with a VERY_NARROW window,
-    // and reports searchable=false if the SV is predicted below the horizon. Falls back to the common-mode
-    // estimate when there is no prediction for that SV.
+    // overload applies a per-SV precedence (best first): (1) a MEASURED sibling Doppler (report_sv_doppler)
+    // - the full observed Doppler of this SV from a locked sibling channel, scaled to this carrier, ALMANAC
+    // window, always searchable (a sibling tracking it proves it is up); (2) the almanac PREDICTION
+    // (set_prediction) - the predicted line-of-sight Doppler (+ the common clock offset), ALMANAC window,
+    // searchable=false if predicted below the horizon; (3) the common-mode estimate. Falls through to (3)
+    // when neither a measurement nor a prediction exists for that SV.
     Estimate estimate( double carrier_hz ) const;
     Estimate estimate( Constellation con, int prn, double carrier_hz ) const;
 
@@ -76,6 +92,16 @@ public:
     // position/time): is the SV above the horizon, and its predicted LINE-OF-SIGHT Doppler as a fraction of
     // carrier (df/f, geometry only - the clock offset is added in estimate()). Thread-safe.
     void set_prediction( Constellation con, int prn, bool above_horizon, double los_doppler_fraction );
+
+    // Cross-code / cross-frequency tracking aiding. A channel that has the SV cleanly locked (frame-synced)
+    // reports its MEASURED carrier Doppler here; a struggling sibling channel on another code/band for the
+    // SAME (constellation,prn) reads it back to recenter its own carrier NCO / acquisition search. The value
+    // is the FULL observed Doppler (LOS + clock) stored as a fraction of carrier (df/f), so it is band-
+    // agnostic - the reader scales by its own carrier. doppler_hz is the PHYSICAL Doppler (acquisition /
+    // initialise() convention, NOT the tracker's negated carrier_freq_). Thread-safe.
+    void report_sv_doppler( Constellation con, int prn, double doppler_hz, double carrier_hz );
+    // Read a sibling's measured Doppler fraction for (con,prn); false if none reported yet. Thread-safe.
+    bool sv_doppler_fraction( Constellation con, int prn, double& fraction_out ) const;
 
     // Whether a search for (con,prn) is worth running now: false only if an almanac prediction places it
     // below the horizon (an unknown SV stays searchable). Thread-safe; the scheduler consults it.
@@ -94,6 +120,7 @@ public:
         clock_fraction_       = 0.0;
         clock_fraction_valid_ = false;
         predictions_.clear();
+        sv_doppler_fraction_.clear();
     }
 
 private:
@@ -114,7 +141,9 @@ private:
     mutable std::mutex mu_;
     double             sum_fraction_ = 0.0; // sum of doppler/carrier over acquired SVs (bridge)
     int                n_            = 0;
-    std::map<int, Prediction> predictions_; // per-SV almanac prediction (key = sv_key)
+    std::map<int, Prediction> predictions_;         // per-SV almanac prediction (key = sv_key)
+    std::map<int, double>     sv_doppler_fraction_; // per-SV MEASURED Doppler/carrier from a locked sibling
+                                                    // (key = sv_key; full observed = LOS + clock)
 
     // Rigorous common-mode offset from the PVT clock-drift solution. Unset until PVT.
     double clock_fraction_       = 0.0;

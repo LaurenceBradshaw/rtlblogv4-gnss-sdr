@@ -170,6 +170,17 @@ void Receiver::setup()
         {
             rtl->set_agc( true );
         }
+        // Read back what the hardware ACTUALLY settled on, so the GUI/CLI config can be verified against
+        // the device (catches a rate the RTL-SDR rounded, an unapplied gain, an accidental AGC, etc.).
+        logging::log(
+            logging::Level::Info,
+            fmt::format(
+                "RTL-SDR dev {}: requested rate {} Hz -> device {} Hz | centre {} Hz | tuner gain {:.1f} dB{} | "
+                "processing rate {} Hz (decim {})",
+                config_.device_index, native_rate, rtl->sample_rate_hz(), rtl->centre_freq_hz(),
+                rtl->tuner_gain_tenths_db() / 10.0, ( config_.gain_db < 0.0 ) ? " [AGC]" : "", sample_rate_hz, decim
+            )
+        );
         source_desc = fmt::format( "RTL-SDR device {} (centre {} Hz)", config_.device_index, GNSS_L1_HZ );
         device_     = std::move( rtl );
     }

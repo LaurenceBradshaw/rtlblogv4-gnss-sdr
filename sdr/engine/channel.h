@@ -47,11 +47,18 @@ struct Channel_snapshot
     Ephemeris eph;  // broadcast orbit/clock (base fields are all the orbit model needs)
     Iono  iono; // broadcast Klobuchar iono (iono.valid false unless this SV decoded SF4 p18)
 
-    // Project the snapshotted SV transmit time forward/back to the common observation sample.
+    // Project the snapshotted SV transmit time forward/back to the common observation sample. The transmit
+    // clock does NOT advance 1:1 with receiver time: from pr = (t_rx - t_tx)*c with d(pr)/dt_rx = range_rate,
+    // dt_tx/dt_rx = 1 - range_rate/c (a receding SV stretches the signal -> transmit time advances slower).
+    // local_s is RECEIVER seconds (rx_sample is the common observation sample = the slowest channel, so
+    // faster channels project BACK; an L1Cd 10 ms-epoch channel can be ~10 ms stale), so scale it by that
+    // ratio. Small (a few m at the staleness extremes) but correct - and it keeps L1CA/L1Cd consistent when
+    // their next_sample grids differ. The slowest channel (local_s = 0) is unaffected.
     double transmit_time_at( Sample_index rx_sample, double sample_rate_hz ) const
     {
         const double local_s = ( static_cast<int64_t>( rx_sample ) - static_cast<int64_t>( next_sample ) ) / sample_rate_hz;
-        return transmission_time_s + local_s;
+        const double range_rate_m_s = -wavelength_m * carrier_doppler_hz;
+        return transmission_time_s + local_s * ( 1.0 - range_rate_m_s / 299792458.0 );
     }
 
     // Pseudorange rate = -lambda * Doppler (textbook; the conj-wipe carrier_freq_ is already the
@@ -202,8 +209,13 @@ private:
     uint32_t                     sample_rate_hz_;
     const double                 EPOCH_SAMPLES; // samples per 1 ms code period
     bool                         lock_reported_;
+    int                          acq_attempts_       = 0;   // full acquisition attempts (DUMP_ACQ telemetry)
     double                       acq_cn0_db_hz_      = 0.0; // C/N0 from the acquisition that locked this channel
     Sample_index                 track_start_sample_ = 0;   // next_sample_ at tracking handoff (frame-sync timeout)
+    // Cross-code/-frequency Doppler aiding throttles (see process_tracking): when this channel last published
+    // its measured Doppler (donor) and last re-centered its NCO from a sibling (recipient).
+    Sample_index                 last_aid_report_sample_ = 0;
+    Sample_index                 last_nudge_sample_      = 0;
     Tracking_history             history_;                  // per-epoch graph history (prompt I/Q, ...)
 
     // Acquisition back-off (#1): after a full attempt finds nothing, don't retry

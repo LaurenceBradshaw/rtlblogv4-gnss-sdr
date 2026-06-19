@@ -36,6 +36,11 @@ public:
     void set_gain_tenths_db( int gain_tenths_db ) override;
     void set_agc( bool enable ) override;
 
+    // Read back what the hardware ACTUALLY settled on (the device rounds rate/freq/gain to discrete
+    // values) - used to log/verify the requested config really reached the device.
+    uint32_t centre_freq_hz() const;
+    int      tuner_gain_tenths_db() const;
+
 private:
     // Runs librtlsdr's blocking async read; cancelled by stop_streaming().
     void        streaming_thread();

@@ -49,16 +49,23 @@ enum class Code
     Cd  // GPS L1Cd (CNAV-2 data; paired with the L1Cp pilot)
 };
 
-// Spreading-symbol modulation. Determines how the code generator lays out chips and
-// (later) how the acquisition/tracking replica is built:
-//   Bpsk   - one chip per code chip (GPS L1 C/A, BeiDou B1I).
-//   Boc11  - BOC(1,1): each chip split into two opposite-sign half-chips (the code
-//            generator bakes this in, doubling the effective chip count / rate). Used
-//            for Galileo E1, as the BOC(1,1) approximation of CBOC(6,1,11).
+// Spreading-symbol modulation. Names the TRUE signal modulation (the replica is currently the BOC(1,1)
+// approximation for all BOC variants - their BOC(6,1) component is at ~6 MHz, far beyond the <=2.5 MHz
+// front-end Nyquist, so it is filtered out and only the BOC(1,1) part survives). The tracker reads this to
+// pick the right code-discriminator + subcarrier-ambiguity handling, which differs by variant:
+//   Bpsk   - one chip per code chip (GPS L1 C/A, BeiDou B1I). No subcarrier.
+//   Boc11  - plain BOC(1,1): each chip -> two opposite-sign half-chips (baked into the replica).
+//   Cboc   - Galileo E1 CBOC(6,1,1/11): BOC(1,1) + a small continuous BOC(6,1); band-limits to clean
+//            BOC(1,1), so the BOC(1,1) approximation matches the received signal well.
+//   Tmboc  - GPS L1C TMBOC(6,1,4/33): BOC(1,1) on 29/33 chips, BOC(6,1) on 4/33. Those 4/33 chips
+//            band-limit to ~zero (a ~12% replica mismatch vs a uniform BOC(1,1) replica), distorting the
+//            ACF - which is why L1C needs TMBOC-aware handling that CBOC does not.
 enum class Modulation
 {
     Bpsk,
-    Boc11
+    Boc11,
+    Cboc,
+    Tmboc
 };
 
 // Tracking-loop noise bandwidths (Hz) used to derive the filter coefficients

@@ -59,10 +59,21 @@ Acquisition_aiding::Estimate Acquisition_aiding::estimate( double carrier_hz ) c
 Acquisition_aiding::Estimate Acquisition_aiding::estimate( Constellation con, int prn, double carrier_hz ) const
 {
     std::lock_guard<std::mutex> lk( mu_ );
-    const auto it = predictions_.find( sv_key( con, prn ) );
+    const int key = sv_key( con, prn );
+
+    // (1) MEASURED sibling Doppler (highest precedence): another channel has this SV cleanly locked, so its
+    // full observed Doppler/carrier is the best center - scale by this carrier. A live sibling lock proves
+    // the SV is up, so it is always searchable here.
+    const auto md = sv_doppler_fraction_.find( key );
+    if( md != sv_doppler_fraction_.end() )
+    {
+        return { md->second * carrier_hz, SEARCH_HBAND_ALMANAC_HZ, n_, clock_fraction_valid_, true };
+    }
+
+    const auto it = predictions_.find( key );
     if( it == predictions_.end() )
     {
-        return estimate_common_locked( carrier_hz ); // no per-SV prediction yet
+        return estimate_common_locked( carrier_hz ); // no per-SV measurement or prediction yet
     }
     // Per-SV almanac prediction: center on this SV's predicted LOS Doppler PLUS the common clock offset
     // (the prediction is geometry-only). With both the almanac geometry and a clock pin, the ALMANAC
@@ -77,6 +88,24 @@ void Acquisition_aiding::set_prediction( Constellation con, int prn, bool above_
 {
     std::lock_guard<std::mutex> lk( mu_ );
     predictions_[sv_key( con, prn )] = { above_horizon, los_doppler_fraction };
+}
+
+void Acquisition_aiding::report_sv_doppler( Constellation con, int prn, double doppler_hz, double carrier_hz )
+{
+    std::lock_guard<std::mutex> lk( mu_ );
+    sv_doppler_fraction_[sv_key( con, prn )] = doppler_hz / carrier_hz; // band-agnostic df/f
+}
+
+bool Acquisition_aiding::sv_doppler_fraction( Constellation con, int prn, double& fraction_out ) const
+{
+    std::lock_guard<std::mutex> lk( mu_ );
+    const auto it = sv_doppler_fraction_.find( sv_key( con, prn ) );
+    if( it == sv_doppler_fraction_.end() )
+    {
+        return false;
+    }
+    fraction_out = it->second;
+    return true;
 }
 
 bool Acquisition_aiding::searchable( Constellation con, int prn ) const

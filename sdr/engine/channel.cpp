@@ -1,6 +1,7 @@
 #include "channel.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include "logging.h"
 #include "timing.h"
 
@@ -15,6 +16,12 @@ constexpr int MAX_EPOCHS_PER_QUANTUM = 64;
 // retrying, doubling each time up to the cap. Satellites that aren't in view go quiet.
 constexpr std::chrono::milliseconds ACQ_BACKOFF_START { 500 };
 constexpr std::chrono::milliseconds ACQ_BACKOFF_MAX { 5000 };
+
+// Cross-code / cross-frequency Doppler aiding (see process_tracking).
+constexpr double AID_REPORT_PERIOD_S = 0.02; // throttle a donor's sibling-Doppler reports (Doppler drifts slowly)
+constexpr double NUDGE_MIN_TRACK_S   = 0.5;  // don't re-center a freshly handed-off channel still pulling in normally
+constexpr double NUDGE_DWELL_S       = 1.0;  // min gap between re-centers, so the loop gets time to pull in
+constexpr double NUDGE_MIN_DELTA_HZ  = 100.0; // only re-center if the aided Doppler differs enough to be worth it
 } // namespace
 
 Channel::Channel(
@@ -170,23 +177,22 @@ const double Channel::current_transmission_time_s() const
     // Get the coarse 6-second subframe master anchor
     const double t_tow = navigation_->ephemeris().tow;
 
-    const double t_since_tow_update =
-        navigation_->ms_since_tow_update() * 0.001; // TODO: Figure out if this includes t_bits, t_ms and t_frac or not
-    // Note: This is used so that in the event that a satellites ephemeris is not updated while t_bits, t_ms and t_frac have all
-    // had their values reset. There could be a better way to do this
+    // Whole code periods (epochs) since the eph.tow anchor. ms_since_tow_update() is an epoch_count_ delta
+    // (1 ms/epoch L1CA, 10 ms/epoch L1C), so it is RESET-ROBUST (it does not depend on the per-bit/per-ms nav
+    // counters that get reset on a TOW update - the reason the old t_bits/t_ms terms were abandoned). It is
+    // whole-epoch only; the sub-epoch part is recovered to ~+/-1 sample by the snapshot's whole-sample
+    // next_sample projection (transmit_time_at). Adding tracking_->get_fractional_chip_time() here does NOT
+    // improve this and breaks it: that getter returns elapsed-WITHIN-period (~= a FULL period right after an
+    // epoch completes), which ms_since_tow_update already counts -> double-counts one period (verified: +9 ms
+    // L1CA-vs-L1C, position destroyed); its complement (the sub-chip residual) only WORSENED the fix. L1CA
+    // PVT is already accurate (~tens of m) without any t_frac, so the dropped fractional code phase is a
+    // minor effect, not the dual-code-seed cause. See the backlog "Sub-ms transmit-time precision" note.
+    const double t_since_tow_update = navigation_->ms_since_tow_update() * 0.001;
 
-    // // Add the elapsed whole navigation bits (scaled to seconds)
-    // const double t_bits = static_cast<double>( navigation_->get_current_bit_index() ) *
-    //                       ( static_cast<double>( signal_.params().nav_bit_ms ) / 1000.0 );
-
-    // // Add the elapsed milliseconds inside the current bit (explicitly 0.001s per tick)
-    // const double t_ms = static_cast<double>( navigation_->get_current_ms_tick() ) * 0.001;
-
-    // // Add the precise sub-millisecond chip fraction from the NCO tracker
-    // const double t_frac = tracking_->get_fractional_chip_time();
-
-    // Combine all components into the ultra-precise time of transmission
-    return t_tow + t_since_tow_update; // + t_bits + t_ms + t_frac;
+    // Sub-sample piece 1 (jitter): add the live code-NCO sub-sample offset of next_sample from the code
+    // boundary, so t_tx isn't quantised to the nearest whole sample. Validated via the TRUTH_LLH harness
+    // (jitter target 42 m -> ~m). A per-channel acquisition-rounding BIAS remains (the acq seed, piece 2).
+    return t_tow + t_since_tow_update + tracking_->code_phase_offset_s();
 }
 
 // process_acquisition
@@ -220,6 +226,19 @@ void Channel::process_acquisition()
     if( acquired )
     {
         const Acquisition_result& r = acquisition_.result();
+        ++acq_attempts_;
+
+        if( std::getenv( "DUMP_ACQ" ) != nullptr ) // per-SV acq telemetry (sensitivity investigation)
+        {
+            logging::log(
+                logging::Level::Info,
+                fmt::format(
+                    "ACQDIAG {} PRN {:2d} attempt {:3d} PASS ratio {:.2f} (thr {:.1f}) C/N0 {:.1f} dopp {:+.0f} code {:.0f}",
+                    signal_.params().name, satellite_id_, acq_attempts_, r.metric, Acquisition_engine::ACQTH,
+                    r.cn0_db_hz, r.doppler_hz, r.code_phase
+                )
+            );
+        }
 
         logging::log(
             logging::Level::Info,
@@ -257,6 +276,19 @@ void Channel::process_acquisition()
 
     if( acquisition_.intg_count() >= acquisition_.target_integrations() )
     {
+        ++acq_attempts_;
+        if( std::getenv( "DUMP_ACQ" ) != nullptr ) // per-SV acq telemetry: log FAILED attempts (the misses)
+        {
+            const Acquisition_result& r = acquisition_.result(); // populated by the last check_acquisition()
+            logging::log(
+                logging::Level::Info,
+                fmt::format(
+                    "ACQDIAG {} PRN {:2d} attempt {:3d} FAIL ratio {:.2f} (thr {:.1f}) C/N0 {:.1f} dopp {:+.0f} code {:.0f}",
+                    signal_.params().name, satellite_id_, acq_attempts_, r.metric, Acquisition_engine::ACQTH,
+                    r.cn0_db_hz, r.doppler_hz, r.code_phase
+                )
+            );
+        }
         // Full attempt finished with no hit -> back off before retrying so satellites
         // that aren't in view stop consuming workers (#1).
         acquisition_.reset();
@@ -352,6 +384,50 @@ void Channel::process_tracking()
         logging::log(
             logging::Level::Info, fmt::format( "Tracking - {} PRN {:2d}  lock lost", signal_.params().name, satellite_id_ )
         );
+    }
+
+    // ---- Cross-code / cross-frequency per-SV Doppler aiding ----
+    // Keyed by (constellation,PRN) only, so an SV's signals on different codes/bands (e.g. GPS L1CA and
+    // L1Cd, or L1 and L5) share one entry: a clean lock on one aids a struggling sibling on another.
+    const Constellation con = signal_.params().constellation;
+    const int           prn = static_cast<int>( satellite_id_ );
+
+    // DONOR: once frame-synced (a genuinely correct lock - safe against the cross-correlation false locks
+    // that the frame-sync timeout evicts, which have high C/N0 + carrier lock but never frame-sync), publish
+    // this SV's measured Doppler as df/f. Throttled. get_carrier_doppler_hz() is the tracker's negated
+    // carrier_freq_ (conj-wipe), so negate it back to the PHYSICAL Doppler the aiding stores.
+    if( navigation_->frame_synced()
+        && ns - last_aid_report_sample_ >= static_cast<Sample_index>( AID_REPORT_PERIOD_S * sample_rate_hz_ ) )
+    {
+        aiding_.report_sv_doppler( con, prn, -tracking_->get_carrier_doppler_hz(), signal_.params().carrier_freq_hz );
+        last_aid_report_sample_ = ns;
+    }
+
+    // RECIPIENT: a channel that is TRACKING but has neither carrier lock nor frame sync is struggling. If a
+    // sibling has measured this SV's Doppler, re-center our carrier NCO on it (scaled to our carrier; df/f is
+    // band-agnostic) and then leave the loop alone for NUDGE_DWELL_S to pull in (sticky). Gated so we never
+    // disturb a freshly handed-off channel still pulling in normally, and only when the aided Doppler differs
+    // enough to be worth the reset.
+    double       sib_fraction = 0.0;
+    const double track_s2     = static_cast<double>( ns - track_start_sample_ ) / sample_rate_hz_;
+    if( !tracking_->has_lock() && !navigation_->frame_synced() && track_s2 > NUDGE_MIN_TRACK_S
+        && ns - last_nudge_sample_ >= static_cast<Sample_index>( NUDGE_DWELL_S * sample_rate_hz_ )
+        && aiding_.sv_doppler_fraction( con, prn, sib_fraction ) )
+    {
+        const double target_hz  = sib_fraction * signal_.params().carrier_freq_hz; // physical Doppler
+        const double current_hz = -tracking_->get_carrier_doppler_hz();            // physical Doppler
+        if( std::abs( target_hz - current_hz ) > NUDGE_MIN_DELTA_HZ )
+        {
+            tracking_->steer_carrier_doppler( target_hz ); // physical Doppler in; tracker negates internally
+            last_nudge_sample_ = ns;
+            logging::log(
+                logging::Level::Info,
+                fmt::format(
+                    "Tracking aid - {} PRN {:2d} carrier re-centered {:+.0f} -> {:+.0f} Hz from sibling lock",
+                    signal_.params().name, satellite_id_, current_hz, target_hz
+                )
+            );
+        }
     }
 
     next_sample_.store( ns + static_cast<Sample_index>( out.samples_consumed ), std::memory_order_relaxed );

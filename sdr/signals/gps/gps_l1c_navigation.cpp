@@ -228,6 +228,9 @@ void Gps_l1c_decoder::process( double prompt_i, double /*prompt_i_prev*/ )
     {
         syms_.erase( syms_.begin(), syms_.begin() + 2 * WINDOW );
     }
+    // NOTE: epoch_count_ is incremented at the TOP of process() here (L1CA does it at the END). This
+    // asymmetry is load-bearing: the eph TOW anchor uses epoch_count_ - SF1_SYMS (no +1, unlike L1CA's
+    // epoch_count_+1) precisely because of this. Keep the two in sync if either changes.
     ++epoch_count_;
 
     if( static_cast<int>( syms_.size() ) < WINDOW )
