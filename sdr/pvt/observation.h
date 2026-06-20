@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdint>
+#include <map>
 #include <vector>
 #include "channel.h"
 #include "constellations.h"
@@ -63,4 +65,19 @@ private:
     Iono iono_;
 
     double last_reception_time_s_ = 0.0; // t_rx_gps_tow_s of the last generate()
+
+    // Hatch carrier-smoothing of the code pseudorange (per selected SV). Within one continuous carrier-phase
+    // arc, blend the noisy code pr with the precise carrier-phase delta. HATCH_WINDOW bounds the arc so the
+    // single-frequency code-carrier IONO divergence (~2*delta_iono*N) stays small (~100 s on L1); harmless at
+    // any N on an iono-free capture. N=1 disables smoothing. Re-tune / go divergence-free with dual frequency.
+    static constexpr int HATCH_WINDOW = 100; // max samples averaged (PVT epochs; ~100 s at a 1 Hz fix rate)
+    struct Hatch_state
+    {
+        double   pr_smooth    = 0.0;       // last smoothed pseudorange (m)
+        double   phase_prev_m = 0.0;       // carrier-phase range (m) at the previous epoch
+        int      n            = 0;         // window count so far (ramps to HATCH_WINDOW; 0 = no arc yet)
+        uint32_t session      = 0;         // lock_session of the arc this state belongs to (reset on change)
+        Code     code         = Code::CA;  // selected component of the arc (reset on a dedup failover flip)
+    };
+    std::map<int, Hatch_state> hatch_; // keyed by sv_key(constellation, prn)
 };

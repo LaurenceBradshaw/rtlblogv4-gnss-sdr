@@ -160,6 +160,11 @@ public:
         return carrier_acc_;
     }
 
+    double get_carrier_phase_cycles() const override
+    {
+        return carrier_phase_cycles_;
+    }
+
     double get_prompt_i() const override
     {
         return II_[0]; // raw prompt-I correlator output (data on I after the conj wipe)
@@ -287,6 +292,7 @@ protected:
     double carrier_freq_   = 0.0; // current carrier frequency (Hz) - mirrors trk.carrfreq
     double remaining_code_ = 0.0; // remaining code phase (code elements) - mirrors trk.remcode
     double remaining_carr_ = 0.0; // remaining carrier phase (rad) - mirrors trk.remcarr
+    double carrier_phase_cycles_ = 0.0; // accumulated carrier phase (cycles) since initialise() - Hatch smoothing
     double code_nco_       = 0.0; // code NCO accumulator
     double code_err_       = 0.0; // last code error (DLL)
     double carrier_nco_    = 0.0; // carrier NCO frequency offset (Hz) - main loop output

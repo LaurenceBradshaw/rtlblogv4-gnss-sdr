@@ -61,6 +61,11 @@ public:
     virtual double get_carrier_doppler_hz() const   = 0;
     virtual double get_carrier_acceleration() const = 0;
 
+    // Accumulated carrier phase (cycles) integrated since initialise(), at next_sample. Monotonic within one
+    // lock arc; resets to 0 on (re-)acquisition. Its delta = integrated Doppler = a precise range change, used
+    // for Hatch carrier-smoothing of the code pseudorange (the absolute value is ambiguous; only deltas matter).
+    virtual double get_carrier_phase_cycles() const = 0;
+
     // Raw prompt correlator output this epoch (the I/Q constellation point). For history/graphs.
     virtual double get_prompt_i() const = 0;
     virtual double get_prompt_q() const = 0;

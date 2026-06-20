@@ -44,6 +44,8 @@ struct Channel_snapshot
     double       carrier_doppler_hz   = 0.0; // tracked carrier Doppler at next_sample
     double       carrier_acceleration = 0.0; // d(Doppler)/dt, for projecting to the common sample
     double       wavelength_m         = 0.0; // c / carrier frequency (constant; cached for convenience)
+    double       carrier_phase_cycles = 0.0; // accumulated carrier phase (cycles) at next_sample (Hatch smoothing)
+    uint32_t     lock_session         = 0;   // ++ each (re-)acquisition; Hatch resets its arc when this changes
 
     Ephemeris eph;  // broadcast orbit/clock (base fields are all the orbit model needs)
     Iono      iono; // broadcast Klobuchar iono (iono.valid false unless this SV decoded SF4 p18)
@@ -71,6 +73,16 @@ struct Channel_snapshot
     double range_rate_at( Sample_index /*rx_sample*/, double /*sample_rate_hz*/ ) const
     {
         return -wavelength_m * carrier_doppler_hz;
+    }
+
+    // Accumulated carrier phase as a RANGE in metres at the common observation sample, sign-aligned to the
+    // pseudorange (so a phase delta matches a pseudorange delta): = -lambda * (cycles projected to rx_sample
+    // via the Doppler, like transmit_time_at). Only DELTAS are used (Hatch carrier-smoothing); the absolute
+    // value carries the unknown integer-cycle ambiguity.
+    double carrier_phase_range_m( Sample_index rx_sample, double sample_rate_hz ) const
+    {
+        const double local_s = ( static_cast<int64_t>( rx_sample ) - static_cast<int64_t>( next_sample ) ) / sample_rate_hz;
+        return -wavelength_m * ( carrier_phase_cycles + carrier_doppler_hz * local_s );
     }
 };
 
@@ -217,6 +229,7 @@ private:
     Sample_index     last_aid_report_sample_ = 0;
     Sample_index     last_nudge_sample_      = 0;
     Sample_index     last_clock_ff_sample_   = 0; // throttle of the common-clock-drift feedforward (Fix 3)
+    uint32_t         track_session_          = 0; // ++ on each (re-)acquisition; published so Hatch resets its arc
     Tracking_history history_; // per-epoch graph history (prompt I/Q, ...)
 
     // Acquisition back-off (#1): after a full attempt finds nothing, don't retry

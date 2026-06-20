@@ -1,4 +1,5 @@
 #include "observation.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -80,6 +81,8 @@ void Observation_engine::generate(
     // resid = pseudorange - true_geometric_range = c*rx_clock (common) + per-SV ranging error; the offline
     // analyzer (tools/truth_residuals.py) removes the per-epoch common term (median) -> per-SV bias+jitter.
     // This is the metric for any observable work (sub-sample DLL, code biases) - NOT the +/-150 m EKF position.
+    bool have_truth = false;
+    Ecef truth_rx {};
     if( const char* truth_env = std::getenv( "TRUTH_LLH" ) )
     {
         double lat_deg = 0.0, lon_deg = 0.0, h_m = 0.0;
@@ -88,34 +91,39 @@ void Observation_engine::generate(
             const double lat = lat_deg * M_PI / 180.0, lon = lon_deg * M_PI / 180.0;
             const double f = 1.0 / 298.257223563, e2 = f * ( 2.0 - f ), a = 6378137.0; // WGS-84
             const double N = a / std::sqrt( 1.0 - e2 * std::sin( lat ) * std::sin( lat ) );
-            const Ecef   rx { ( N + h_m ) * std::cos( lat ) * std::cos( lon ),
-                              ( N + h_m ) * std::cos( lat ) * std::sin( lon ),
-                              ( N * ( 1.0 - e2 ) + h_m ) * std::sin( lat ) };
-            for( const Channel_snapshot& s : snaps )
+            truth_rx   = { ( N + h_m ) * std::cos( lat ) * std::cos( lon ),
+                         ( N + h_m ) * std::cos( lat ) * std::sin( lon ),
+                         ( N * ( 1.0 - e2 ) + h_m ) * std::sin( lat ) };
+            have_truth = true;
+        }
+    }
+    if( have_truth )
+    {
+        for( const Channel_snapshot& s : snaps )
+        {
+            if( !s.has_observable || !s.has_lock )
             {
-                if( !s.has_observable || !s.has_lock )
-                {
-                    continue;
-                }
-                const Constellation con     = s.constellation;
-                const double        t_tx    = s.transmit_time_at( rx_sample, sample_rate_hz );
-                const double        transit = t_rx_gps_tow_s - t_tx;
-                const Ecef          sv      = orbit::satellite_ecef_pos( s.eph, t_tx, con );
-                const double        cs = std::cos( constants::EARTH_ROTATION_RATE_RAD_S * transit ), sn = std::sin( constants::EARTH_ROTATION_RATE_RAD_S * transit );
-                const Ecef          svr { sv.x * cs + sv.y * sn, -sv.x * sn + sv.y * cs, sv.z }; // Sagnac to rx epoch
-                const double        range = std::sqrt( ( svr.x - rx.x ) * ( svr.x - rx.x ) + ( svr.y - rx.y ) * ( svr.y - rx.y )
-                                                       + ( svr.z - rx.z ) * ( svr.z - rx.z ) );
-                const double        sv_clk = orbit::satellite_clock_offset( s.eph, t_tx, con );
-                const double        resid  = transit * constants::SPEED_OF_LIGHT_M_S + sv_clk * constants::SPEED_OF_LIGHT_M_S - range; // c*rx_clock + per-SV error
-                logging::log(
-                    logging::Level::Info,
-                    fmt::format(
-                        "TRUTHDIAG rx={} con={} prn={:2d} code={} resid={:.3f} range={:.1f}",
-                        static_cast<uint64_t>( rx_sample ), static_cast<int>( con ), static_cast<int>( s.satellite_id ),
-                        static_cast<int>( s.code ), resid, range
-                    )
-                );
+                continue;
             }
+            const Constellation con     = s.constellation;
+            const double        t_tx    = s.transmit_time_at( rx_sample, sample_rate_hz );
+            const double        transit = t_rx_gps_tow_s - t_tx;
+            const Ecef          sv      = orbit::satellite_ecef_pos( s.eph, t_tx, con );
+            const double        cs = std::cos( constants::EARTH_ROTATION_RATE_RAD_S * transit ), sn = std::sin( constants::EARTH_ROTATION_RATE_RAD_S * transit );
+            const Ecef          svr { sv.x * cs + sv.y * sn, -sv.x * sn + sv.y * cs, sv.z }; // Sagnac to rx epoch
+            const double range = std::sqrt( ( svr.x - truth_rx.x ) * ( svr.x - truth_rx.x )
+                                            + ( svr.y - truth_rx.y ) * ( svr.y - truth_rx.y )
+                                            + ( svr.z - truth_rx.z ) * ( svr.z - truth_rx.z ) );
+            const double sv_clk = orbit::satellite_clock_offset( s.eph, t_tx, con );
+            const double resid  = transit * constants::SPEED_OF_LIGHT_M_S + sv_clk * constants::SPEED_OF_LIGHT_M_S - range;
+            logging::log(
+                logging::Level::Info,
+                fmt::format(
+                    "TRUTHDIAG rx={} con={} prn={:2d} code={} resid={:.3f} range={:.1f}",
+                    static_cast<uint64_t>( rx_sample ), static_cast<int>( con ), static_cast<int>( s.satellite_id ),
+                    static_cast<int>( s.code ), resid, range
+                )
+            );
         }
     }
 
@@ -237,6 +245,29 @@ void Observation_engine::generate(
             }
             m.pseudorange_m -= correction_m;
         }
+
+        // Hatch carrier-smoothing: within one continuous lock arc, blend the noisy code pseudorange with the
+        // precise carrier-phase delta (integrated Doppler). N ramps to HATCH_WINDOW (the iono-divergence bound).
+        // Start/restart the arc on the first epoch, a re-acquisition (lock_session change), or a dedup component
+        // flip (code change); lock loss is already gated out (only locked SVs reach here).
+        const int    sv      = sv_key( s.constellation, static_cast<int>( s.satellite_id ) );
+        const double phase_m = s.carrier_phase_range_m( rx_sample, sample_rate_hz );
+        Hatch_state& h       = hatch_[sv];
+        if( h.n == 0 || h.session != s.lock_session || h.code != s.code )
+        {
+            h.pr_smooth = m.pseudorange_m; // (re)start the arc on the raw code pr
+            h.n         = 1;
+        }
+        else
+        {
+            h.n                   = std::min( h.n + 1, HATCH_WINDOW );
+            const double predicted = h.pr_smooth + ( phase_m - h.phase_prev_m ); // carrier-propagated from k-1
+            h.pr_smooth = m.pseudorange_m / h.n + ( 1.0 - 1.0 / h.n ) * predicted;
+        }
+        h.phase_prev_m  = phase_m;
+        h.session       = s.lock_session;
+        h.code          = s.code;
+        m.pseudorange_m = h.pr_smooth;
 
         measurements_.push_back( m );
     }

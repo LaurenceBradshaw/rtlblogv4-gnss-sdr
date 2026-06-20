@@ -85,6 +85,7 @@ void Tracking_core::initialise( const Acquisition_result& acq )
     code_freq_      = code_rate_;
     remaining_code_ = 0.0;
     remaining_carr_ = 0.0;
+    carrier_phase_cycles_ = 0.0;
     code_nco_       = 0.0;
     code_err_       = 0.0;
     carrier_nco_    = 0.0;
@@ -306,6 +307,7 @@ void Tracking_core::correlate_impl( const Sample_block& block, int n, Replica re
     remaining_code_ += n * ci - code_len_;
 
     remaining_carr_ += n * step_phase;
+    carrier_phase_cycles_ += n * step_phase / ( 2.0 * M_PI ); // unwrapped total cycles (for Hatch smoothing)
     remaining_carr_ = std::fmod( remaining_carr_, 2.0 * M_PI );
     if( remaining_carr_ < 0.0 )
     {
