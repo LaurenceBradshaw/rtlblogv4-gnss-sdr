@@ -122,6 +122,7 @@ void Receiver::set_source_params( Source_params params )
     config_.device_index   = params.device_index;
     config_.gain_db        = params.gain_db;
     config_.decimation     = std::max( 1u, params.decimation );
+    config_.hatch_enabled  = params.hatch_enabled;
 }
 
 Receiver::~Receiver() = default;
@@ -136,7 +137,7 @@ void Receiver::setup()
     channels_.clear();
     channel_ptrs_.clear();
     aiding_.reset();
-    obs_engine_ = Observation_engine {};
+    obs_engine_ = Observation_engine { config_.hatch_enabled };
     pos_solver_ = Position_solver {};
     clear_published_state(); // a fresh run starts from a clean GUI state (drops any frozen EOF state)
 

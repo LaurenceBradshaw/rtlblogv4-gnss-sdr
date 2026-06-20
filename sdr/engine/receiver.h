@@ -37,6 +37,10 @@ struct Receiver_config
     // run near real time. The fractional rate that an indivisible factor leaves is harmless.
     uint32_t decimation = 1;
 
+    // Hatch carrier-smoothing of the code pseudorange (on/off). The window length is the fixed internal
+    // Observation_engine::HATCH_WINDOW; this just enables/disables the smoothing.
+    bool hatch_enabled = true;
+
     // Which signals to search, each with its own PRN allowlist (empty set = all PRNs in that signal's
     // range). Empty list -> default_signal_selection() (GPS L1 C/A + Galileo E1-B, all PRNs).
     // (Not named `signals` - that is a Qt macro in the GUI build.)
@@ -55,6 +59,7 @@ struct Source_params
     int              device_index   = 0;       // RTL-SDR
     double           gain_db        = -1.0;    // RTL-SDR; <0 => hardware AGC
     uint32_t         decimation     = 1;       // FIR-decimate the source by this factor (1 = none)
+    bool             hatch_enabled  = true;    // Hatch carrier-smoothing of the code pseudorange (on/off)
 };
 
 // Timing/progress of the processing loop, published for the GUI status bar. exec = wall-clock since

@@ -33,6 +33,9 @@ struct Satellite_measurement
 class Observation_engine
 {
 public:
+    // hatch_enabled: carrier-smooth the code pseudorange (HATCH_WINDOW). Off -> raw code pseudorange.
+    explicit Observation_engine( bool hatch_enabled = true ) : hatch_enabled_( hatch_enabled ) {}
+
     // common rx_sample (e.g. scheduler->min_next_sample()); raw PR = (t_rx_common - t_tx)*c.
     // user_ecef: the previous position fix, used for the iono/tropo look-angles + lat/lon;
     //            nullptr before the first fix (atmospheric corrections are then skipped).
@@ -71,6 +74,7 @@ private:
     // single-frequency code-carrier IONO divergence (~2*delta_iono*N) stays small (~100 s on L1); harmless at
     // any N on an iono-free capture. N=1 disables smoothing. Re-tune / go divergence-free with dual frequency.
     static constexpr int HATCH_WINDOW = 100; // max samples averaged (PVT epochs; ~100 s at a 1 Hz fix rate)
+    bool                 hatch_enabled_ = true; // off -> raw code pseudorange (smoothing block skipped)
     struct Hatch_state
     {
         double   pr_smooth    = 0.0;       // last smoothed pseudorange (m)

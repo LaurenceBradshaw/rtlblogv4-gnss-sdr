@@ -246,28 +246,32 @@ void Observation_engine::generate(
             m.pseudorange_m -= correction_m;
         }
 
-        // Hatch carrier-smoothing: within one continuous lock arc, blend the noisy code pseudorange with the
-        // precise carrier-phase delta (integrated Doppler). N ramps to HATCH_WINDOW (the iono-divergence bound).
-        // Start/restart the arc on the first epoch, a re-acquisition (lock_session change), or a dedup component
-        // flip (code change); lock loss is already gated out (only locked SVs reach here).
-        const int    sv      = sv_key( s.constellation, static_cast<int>( s.satellite_id ) );
-        const double phase_m = s.carrier_phase_range_m( rx_sample, sample_rate_hz );
-        Hatch_state& h       = hatch_[sv];
-        if( h.n == 0 || h.session != s.lock_session || h.code != s.code )
+        // Hatch carrier-smoothing (when enabled): within one continuous lock arc, blend the noisy code
+        // pseudorange with the precise carrier-phase delta (integrated Doppler). N ramps to HATCH_WINDOW (the
+        // iono-divergence bound). Start/restart the arc on the first epoch, a re-acquisition (lock_session
+        // change), or a dedup component flip (code change); lock loss is already gated out (only locked SVs
+        // reach here). Disabled -> the raw code pseudorange passes through untouched.
+        if( hatch_enabled_ )
         {
-            h.pr_smooth = m.pseudorange_m; // (re)start the arc on the raw code pr
-            h.n         = 1;
+            const int    sv      = sv_key( s.constellation, static_cast<int>( s.satellite_id ) );
+            const double phase_m = s.carrier_phase_range_m( rx_sample, sample_rate_hz );
+            Hatch_state& h       = hatch_[sv];
+            if( h.n == 0 || h.session != s.lock_session || h.code != s.code )
+            {
+                h.pr_smooth = m.pseudorange_m; // (re)start the arc on the raw code pr
+                h.n         = 1;
+            }
+            else
+            {
+                h.n = std::min( h.n + 1, HATCH_WINDOW );
+                const double predicted = h.pr_smooth + ( phase_m - h.phase_prev_m ); // carrier-propagated from k-1
+                h.pr_smooth            = m.pseudorange_m / h.n + ( 1.0 - 1.0 / h.n ) * predicted;
+            }
+            h.phase_prev_m  = phase_m;
+            h.session       = s.lock_session;
+            h.code          = s.code;
+            m.pseudorange_m = h.pr_smooth;
         }
-        else
-        {
-            h.n                   = std::min( h.n + 1, HATCH_WINDOW );
-            const double predicted = h.pr_smooth + ( phase_m - h.phase_prev_m ); // carrier-propagated from k-1
-            h.pr_smooth = m.pseudorange_m / h.n + ( 1.0 - 1.0 / h.n ) * predicted;
-        }
-        h.phase_prev_m  = phase_m;
-        h.session       = s.lock_session;
-        h.code          = s.code;
-        m.pseudorange_m = h.pr_smooth;
 
         measurements_.push_back( m );
     }

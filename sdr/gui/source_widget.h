@@ -58,6 +58,7 @@ private:
     QLineEdit*      sample_rate_  = nullptr; // native source rate (Hz); both sources
     QSpinBox*       decimation_   = nullptr; // FIR decimation factor; both sources
     QLabel*         effective_rate_ = nullptr; // live "processing rate after decimation" read-out
+    QCheckBox*      hatch_        = nullptr; // Hatch carrier-smoothing of the code pseudorange (on/off)
     QSpinBox*       device_index_ = nullptr;
     QDoubleSpinBox* gain_         = nullptr;
     QCheckBox*      agc_          = nullptr; // hardware AGC -> gain_db < 0

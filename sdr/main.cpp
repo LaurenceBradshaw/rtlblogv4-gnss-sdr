@@ -47,6 +47,8 @@ int main( int argc, char** argv )
                          "Processing rate becomes sample-rate/factor. e.g. a 25 MHz capture with "
                          "--decimate 12 runs at ~2.083 MHz",
           cxxopts::value<uint32_t>()->default_value( "1" ) )
+        ( "hatch",       "Hatch carrier-smooth the code pseudorange (lower noise). --hatch=false to disable",
+          cxxopts::value<bool>()->default_value( "true" ) )
         ( "signal",      "Signal to search, repeatable: CONSTELLATION[:COMPONENT], where "
                          "CONSTELLATION=gps|galileo|beidou and COMPONENT=l1ca|l1c|e1|b1i. Omit the component "
                          "to search ALL of that constellation's components. e.g. --signal gps:l1ca "
@@ -74,6 +76,7 @@ int main( int argc, char** argv )
     config.device_index   = result["device"].as<int>();
     config.gain_db        = result["gain"].as<double>();
     config.decimation     = std::max( 1u, result["decimate"].as<uint32_t>() );
+    config.hatch_enabled  = result["hatch"].as<bool>();
 
     // The GUI's Source tab supplies the file / source params, so --file is optional under --gui.
     if( !gui && !config.use_rtlsdr && !result.count( "file" ) )

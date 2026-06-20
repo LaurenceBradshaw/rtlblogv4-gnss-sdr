@@ -107,6 +107,11 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     effective_rate_ = new QLabel( this );
     effective_rate_->setStyleSheet( QStringLiteral( "color: gray;" ) );
     common->addRow( QString(), effective_rate_ ); // sits under the decimation field, no label column
+    hatch_ = new QCheckBox( QStringLiteral( "Hatch carrier-smoothing" ), this );
+    hatch_->setChecked( cfg.hatch_enabled );
+    hatch_->setToolTip( QStringLiteral(
+        "Carrier-smooth the code pseudorange (lower noise, tighter fix). Reset on lock loss / re-acquire." ) );
+    common->addRow( QStringLiteral( "Smoothing:" ), hatch_ );
     root->addLayout( common );
 
     status_ = new QLabel( this );
@@ -188,6 +193,7 @@ Source_params Source_widget::source_params() const
     p.device_index   = device_index_->value();
     p.gain_db        = agc_->isChecked() ? -1.0 : gain_->value();
     p.decimation     = static_cast<uint32_t>( decimation_->value() );
+    p.hatch_enabled  = hatch_->isChecked();
     return p;
 }
 
@@ -236,6 +242,7 @@ void Source_widget::set_editable( bool on )
     rtlsdr_group_->setEnabled( on );
     sample_rate_->setEnabled( on );
     decimation_->setEnabled( on );
+    hatch_->setEnabled( on );
     if( on )
     {
         update_gain_enabled(); // restore the AGC-driven gain enable state
