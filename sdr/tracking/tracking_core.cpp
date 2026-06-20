@@ -97,7 +97,7 @@ void Tracking_core::initialise( const Acquisition_result& acq )
 
     // Reset the lock detector so a re-acquired channel starts measuring afresh.
     m2_sum_            = 0.0;
-    m4_sum_            = 0.0;
+    abs_i_sum_         = 0.0;
     nbd_sum_           = 0.0;
     cn0_count_         = 0;
     cn0_db_hz_         = 0.0;
@@ -353,24 +353,28 @@ void Tracking_core::clear_cumsum()
 // the GUI C/N0 display and the PVT observable gate, so it is worth pinning).
 namespace
 {
-// M2M4 (2nd/4th-moment) C/N0 estimate (dB-Hz) from the window-averaged prompt-power moments
-// M2 = <P>, M4 = <P^2> (P = I^2+Q^2). Signal power Pd = sqrt(2*M2^2 - M4), noise Pn = M2 - Pd,
-// SNR = Pd/Pn, C/N0 = 10*log10(SNR / Tcoh). Returns 0 when the moments are inconsistent with a
-// coherent signal (no positive SNR). Scale-invariant: scaling P by k leaves the SNR (a ratio) fixed.
-double m2m4_cn0_db_hz( double m2, double m4, double epoch_period_s )
+// SNV (signal-to-noise variance) C/N0 estimate (dB-Hz) from window means: mean_abs_i = <|I|>,
+// mean_power = <I^2 + Q^2>. The coherent signal power is Psig = mean_abs_i^2 (|I|, not I, because BPSK data
+// flips the sign so a signed mean would cancel); the noise is the variance left over, noise = mean_power -
+// Psig; SNR = Psig/noise; C/N0 = 10*log10(SNR / Tcoh). Returns 0 when there is no coherent signal.
+// Scale-invariant: scaling I by k (and power by k^2) leaves the ratio fixed.
+//
+// HIGH-SNR ROBUST, unlike the old M2M4 (Pn = M2 - sqrt(2 M2^2 - M4)): there the noise was the difference of
+// two large near-equal terms, which at high per-epoch SNR (long coherent integration, e.g. L1Cd's 10 ms code)
+// is dominated by estimation noise and SATURATES (~38 dB-Hz regardless of true strength). Here the noise is a
+// variance measured directly, so the estimate stays accurate past 45 dB-Hz - making C/N0 comparable across
+// components of different integration length (L1CA 1 ms vs L1Cd 10 ms). Assumes the carrier is locked (signal
+// on I); when it is not, <|I|> is reduced and C/N0 reads low - consistent with the cos(2*phi) lock gate, which
+// also requires energy on I, so the two agree on whether the channel is locked.
+double snv_cn0_db_hz( double mean_abs_i, double mean_power, double epoch_period_s )
 {
-    const double pd2 = 2.0 * m2 * m2 - m4; // signal power squared (negative when no coherent signal)
-    if( pd2 <= 0.0 || m2 <= 0.0 )
+    const double psig  = mean_abs_i * mean_abs_i;
+    const double noise = mean_power - psig;
+    if( psig <= 0.0 || noise <= 0.0 )
     {
         return 0.0;
     }
-    const double pd = std::sqrt( pd2 );
-    const double pn = m2 - pd;
-    if( pn <= 0.0 )
-    {
-        return 0.0;
-    }
-    return 10.0 * std::log10( ( pd / pn ) / epoch_period_s );
+    return 10.0 * std::log10( ( psig / noise ) / epoch_period_s );
 }
 
 // Van Dierendonck carrier lock test cos(2*phi) ~ NBD/NBP, where NBD = sum(I^2 - Q^2) and
@@ -384,9 +388,9 @@ double carrier_lock_cos2phi( double nbd_sum, double nbp_sum )
 // update_lock_detectors
 // Two complementary detectors over a window of CN0_WINDOW_EPOCHS, then a hysteretic lock decision.
 //
-// (1) M2M4 C/N0 on the prompt power P = I^2 + Q^2 (see m2m4_cn0_db_hz). P is sign-insensitive (data
-//     flips don't matter) and the SNR is a ratio (scale-invariant), so this is identical for every
-//     signal; only epoch_period_ sets the dB-Hz offset.
+// (1) SNV C/N0 from <|I|> and <I^2+Q^2> (see snv_cn0_db_hz). Scale-invariant and identical for every signal
+//     (only epoch_period_ sets the dB-Hz offset), and high-SNR robust so it stays comparable across
+//     components of different integration length (the old M2M4 saturated on the long-epoch ones).
 // (2) Van Dierendonck carrier lock test cos(2*phi) ~ (<I^2> - <Q^2>) / (<I^2> + <Q^2>): ~+1 when the
 //     carrier is phase-locked (all energy on I), <=0 when it is lost. Power-difference form (data-robust;
 //     see the header notes on why not the coherent (sum I)^2 one).
@@ -396,7 +400,7 @@ void Tracking_core::update_lock_detectors( double prompt_i, double prompt_q )
 {
     const double power = prompt_i * prompt_i + prompt_q * prompt_q;
     m2_sum_ += power;
-    m4_sum_ += power * power;
+    abs_i_sum_ += std::abs( prompt_i );
     nbd_sum_ += prompt_i * prompt_i - prompt_q * prompt_q;
 
     if( ++cn0_count_ < CN0_WINDOW_EPOCHS )
@@ -404,8 +408,9 @@ void Tracking_core::update_lock_detectors( double prompt_i, double prompt_q )
         return;
     }
 
-    // (1) M2M4 C/N0. (2) Carrier lock test (NBP = sum I^2+Q^2 = m2_sum_; NBD = sum I^2-Q^2 = nbd_sum_).
-    const double cn0       = m2m4_cn0_db_hz( m2_sum_ / cn0_count_, m4_sum_ / cn0_count_, epoch_period_ );
+    // (1) SNV C/N0 (<|I|> and <I^2+Q^2>). (2) Carrier lock test (NBP = sum I^2+Q^2 = m2_sum_; NBD = sum
+    // I^2-Q^2 = nbd_sum_).
+    const double cn0       = snv_cn0_db_hz( abs_i_sum_ / cn0_count_, m2_sum_ / cn0_count_, epoch_period_ );
     const double lock_test = carrier_lock_cos2phi( nbd_sum_, m2_sum_ );
 
     // EMA-smooth both (seed on the first window so they converge quickly).
@@ -434,7 +439,7 @@ void Tracking_core::update_lock_detectors( double prompt_i, double prompt_q )
     }
 
     m2_sum_    = 0.0;
-    m4_sum_    = 0.0;
+    abs_i_sum_ = 0.0;
     nbd_sum_   = 0.0;
     cn0_count_ = 0;
 }
@@ -709,52 +714,60 @@ void Tracking_core::advance_secondary_sync()
 
 namespace
 {
-// Closed-form prompt-power moments for a coherent signal of power Pd in complex Gaussian noise of
-// power Pn: M2 = Pd + Pn, M4 = Pd^2 + 4*Pd*Pn + 2*Pn^2. The M2M4 estimator inverts these exactly.
-void moments_for( double pd, double pn, double& m2, double& m4 )
+// SNV inputs for a known coherent signal power Psig in noise of variance N: mean|I| = sqrt(Psig),
+// mean power = Psig + N. The estimator returns 10*log10((Psig/N)/T).
+void snv_inputs_for( double psig, double noise, double& mean_abs_i, double& mean_power )
 {
-    m2 = pd + pn;
-    m4 = pd * pd + 4.0 * pd * pn + 2.0 * pn * pn;
+    mean_abs_i = std::sqrt( psig );
+    mean_power = psig + noise;
 }
 } // namespace
 
-TEST_CASE( "m2m4_cn0_recovers_known_snr", "[tracking][cn0]" )
+TEST_CASE( "snv_cn0_recovers_known_snr", "[tracking][cn0]" )
 {
-    // Feed moments synthesised from a known Pd/Pn -> the estimator must return 10*log10(SNR/T).
+    // Feed inputs synthesised from a known Psig/N -> the estimator must return 10*log10(SNR/T).
     struct
     {
-        double pd, pn, t;
+        double psig, noise, t;
     } cases[] = { { 100.0, 1.0, 1e-3 }, { 50.0, 2.0, 1e-3 }, { 10.0, 5.0, 4e-3 }, { 1000.0, 7.0, 1e-3 } };
     for( const auto& c : cases )
     {
-        double m2 = 0.0, m4 = 0.0;
-        moments_for( c.pd, c.pn, m2, m4 );
-        const double expected = 10.0 * std::log10( ( c.pd / c.pn ) / c.t );
-        INFO( "Pd=" << c.pd << " Pn=" << c.pn << " T=" << c.t );
-        REQUIRE( m2m4_cn0_db_hz( m2, m4, c.t ) == Catch::Approx( expected ) );
+        double mi = 0.0, mp = 0.0;
+        snv_inputs_for( c.psig, c.noise, mi, mp );
+        const double expected = 10.0 * std::log10( ( c.psig / c.noise ) / c.t );
+        INFO( "Psig=" << c.psig << " N=" << c.noise << " T=" << c.t );
+        REQUIRE( snv_cn0_db_hz( mi, mp, c.t ) == Catch::Approx( expected ) );
     }
 }
 
-TEST_CASE( "m2m4_cn0_is_scale_invariant", "[tracking][cn0]" )
+TEST_CASE( "snv_cn0_is_scale_invariant", "[tracking][cn0]" )
 {
-    double m2 = 0.0, m4 = 0.0;
-    moments_for( 80.0, 3.0, m2, m4 );
-    const double base = m2m4_cn0_db_hz( m2, m4, 1e-3 );
-    // Scaling the prompt power by k scales M2 by k and M4 by k^2; the SNR (a ratio) is unchanged.
-    for( double k : { 0.01, 4.0, 1000.0 } )
+    double mi = 0.0, mp = 0.0;
+    snv_inputs_for( 80.0, 3.0, mi, mp );
+    const double base = snv_cn0_db_hz( mi, mp, 1e-3 );
+    // Scaling the prompt I/Q by s scales mean|I| by s and mean power by s^2; the SNR (a ratio) is unchanged.
+    for( double s : { 0.1, 2.0, 100.0 } )
     {
-        REQUIRE( m2m4_cn0_db_hz( k * m2, k * k * m4, 1e-3 ) == Catch::Approx( base ) );
+        REQUIRE( snv_cn0_db_hz( s * mi, s * s * mp, 1e-3 ) == Catch::Approx( base ) );
     }
 }
 
-TEST_CASE( "m2m4_cn0_zero_when_no_coherent_signal", "[tracking][cn0]" )
+TEST_CASE( "snv_cn0_high_snr_not_saturated", "[tracking][cn0]" )
 {
-    // Pure noise (Pd=0): M2=Pn, M4=2*Pn^2 -> 2*M2^2 - M4 = 0 -> no positive SNR -> 0 dB-Hz.
-    double m2 = 0.0, m4 = 0.0;
-    moments_for( 0.0, 5.0, m2, m4 );
-    REQUIRE( m2m4_cn0_db_hz( m2, m4, 1e-3 ) == 0.0 );
-    // Inconsistent moments (M4 above the coherent bound) also clamp to 0.
-    REQUIRE( m2m4_cn0_db_hz( 10.0, 1000.0, 1e-3 ) == 0.0 );
+    // The whole point: at high per-epoch SNR the SNV estimate stays accurate (M2M4 saturated here). Psig=1e4,
+    // N=0.1, T=1 ms -> SNR=1e5 -> C/N0 = 10*log10(1e5/1e-3) = 80 dB-Hz. Must return ~80, not a capped ~38.
+    double mi = 0.0, mp = 0.0;
+    snv_inputs_for( 1.0e4, 0.1, mi, mp );
+    REQUIRE( snv_cn0_db_hz( mi, mp, 1e-3 ) == Catch::Approx( 80.0 ) );
+    REQUIRE( snv_cn0_db_hz( mi, mp, 1e-3 ) > 50.0 );
+}
+
+TEST_CASE( "snv_cn0_zero_when_no_coherent_signal", "[tracking][cn0]" )
+{
+    // No coherent signal -> mean|I| ~ 0 -> Psig ~ 0 -> 0 dB-Hz.
+    REQUIRE( snv_cn0_db_hz( 0.0, 5.0, 1e-3 ) == 0.0 );
+    // Degenerate: all power claimed as signal leaves no noise -> guarded to 0.
+    REQUIRE( snv_cn0_db_hz( 3.0, 9.0, 1e-3 ) == 0.0 ); // mean_abs_i^2 = 9 == mean_power -> noise 0
 }
 
 TEST_CASE( "carrier_lock_cos2phi_matches_phase", "[tracking][lock]" )

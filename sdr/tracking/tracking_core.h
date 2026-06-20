@@ -66,8 +66,11 @@ public:
 
     // Lock detector. Two tests over a window of CN0_WINDOW_EPOCHS (both EMA-smoothed), combined with
     // hysteresis - the standard gnss-sdr scheme:
-    //   (1) M2M4 C/N0 from the 2nd/4th moments of per-epoch prompt power. Sign-/scale-invariant, so
-    //       it is the SAME for every signal - only epoch_period_ feeds the dB-Hz scaling.
+    //   (1) SNV (signal-to-noise variance) C/N0: Psig = (<|I|>)^2, noise = <I^2+Q^2> - Psig, SNR = Psig/noise.
+    //       Scale-invariant, the SAME for every signal (only epoch_period_ feeds the dB-Hz scaling), and -
+    //       unlike the old M2M4 - HIGH-SNR ROBUST: it measures noise as a variance instead of M2M4's
+    //       M2 - sqrt(2 M2^2 - M4) difference of large near-equal terms (which saturated ~38 dB-Hz on long
+    //       coherent integration, e.g. L1Cd's 10 ms code, making C/N0 incomparable across components).
     //   (2) Van Dierendonck carrier lock test cos(2*phi) ~ (<I^2> - <Q^2>) / (<I^2> + <Q^2>): ~+1 when
     //       all energy is on I (phase-locked), <=0 when the carrier is lost. (Power-difference form, not
     //       the coherent (sum I)^2 one, because an epoch is one code period - shorter than a nav bit -
@@ -299,8 +302,8 @@ protected:
     bool   clock_ff_seeded_ = false;
 
     // Lock detector state (updated every epoch in correlate_epoch; see update_lock_detectors).
-    double m2_sum_    = 0.0; // running sum of prompt power (I^2+Q^2) over the current window
-    double m4_sum_    = 0.0; // running sum of prompt power squared
+    double m2_sum_    = 0.0; // running sum of prompt power (I^2+Q^2) over the window (SNV total power + lock NBP)
+    double abs_i_sum_ = 0.0; // running sum of |prompt I| over the window (SNV coherent signal amplitude)
     double nbd_sum_   = 0.0; // running sum of (I^2 - Q^2) over the window (carrier-lock numerator)
     int    cn0_count_ = 0;   // epochs accumulated into the current window
     double cn0_db_hz_ = 0.0; // smoothed C/N0 estimate (dB-Hz); 0 until the first window completes

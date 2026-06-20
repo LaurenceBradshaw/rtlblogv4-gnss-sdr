@@ -26,6 +26,7 @@ void Observation_engine::generate(
         snaps.push_back( ch->snapshot() );
     }
 
+
     // Cache the broadcast Klobuchar iono once any channel has decoded SF4 page 18. It is
     // GPS-system-wide, so the first SV's copy serves the whole fix and persists thereafter.
     if( !iono_.valid )
@@ -126,15 +127,16 @@ void Observation_engine::generate(
     // dip won't drop a healthy SV. (Cross-correlation false tracks keep a real carrier, so they still pass
     // here - the frame-sync timeout is what evicts those.)
     //
-    // Selection is by a FIXED component priority, NOT C/N0. C/N0 is not comparable across components: the
-    // M2M4 estimator saturates at high per-epoch SNR, and a component's per-epoch SNR scales with its
-    // coherent integration, so GPS L1Cd (10 ms code) reads a flat ~38 dB-Hz regardless of true strength
-    // while L1CA (1 ms) reads its true 41-46 (verified same-SV: CA-Cd gap 3-8 dB, Cd flat across SVs).
-    // Comparing those magnitudes would unfairly favour L1CA. So pick deterministically by code_rank and let
-    // the has_observable && has_lock gate handle failover: the preferred component is used whenever it is
-    // healthy, else the other carries the SV. The M2 fix made the per-component transmit times agree, so
-    // the choice - and failover - is measurement-consistent. (A high-SNR-robust C/N0 estimator could later
-    // restore quality-weighted selection; see the multi-code-fusion backlog.)
+    // Selection is by a FIXED component priority, NOT C/N0 - deliberately, even though C/N0 is now comparable
+    // across components (the SNV estimator replaced M2M4, which used to saturate ~38 dB-Hz on the long-epoch
+    // components and made cross-component C/N0 meaningless). Two reasons to keep fixed priority for SAME-BAND
+    // (L1CA vs L1Cd): (1) the L1C PILOT carries only a fraction of the signal power, so its C/N0 is
+    // SYSTEMATICALLY ~2-3 dB below L1CA's (measured) - a C/N0 race would just always pick L1CA anyway; (2)
+    // fixed priority is DETERMINISTIC, whereas a C/N0 race could flip component mid-run on a momentary
+    // fluctuation, and each flip jumps the pseudorange by ~1 sample and jostles the EKF. So pick by code_rank
+    // and let the has_observable && has_lock gate handle failover (preferred component when healthy, else the
+    // other carries the SV). The comparable C/N0 instead pays off CROSS-BAND (future L1+L5), where the
+    // components have genuinely different quality worth racing on.
     auto code_rank = []( Code c )
     {
         // higher = preferred; only same-constellation codes ever compete here
