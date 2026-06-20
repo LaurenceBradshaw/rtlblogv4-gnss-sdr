@@ -13,18 +13,18 @@ const Signal_params Gps_l1c_signal::params_ = {
     /* code_length_chips */ gps::L1cp_code::PRIMARY_CHIPS, // 10230 ranging chips
     /* code_period_s     */ gps::L1cp_code::PERIOD_TIME,   // 10 ms
     /* nav_bit_ms        */ 10,                            // CNAV-2: 100 sym/s -> 10 ms/symbol (= one code period)
-    /* modulation        */ Modulation::Tmboc,            // TMBOC(6,1,4/33); BOC(1,1) replica today (4/33 BOC(6,1) chips need handling)
-    /* acq_integrations  */ 3,  // 10 ms code -> ~10 dB/epoch, few epochs needed
-    /* acq_fft_factor    */ 1,  // single-period circular FFT (the 10 ms code is long; halves cost)
+    /* modulation        */ Modulation::Tmboc, // TMBOC(6,1,4/33); BOC(1,1) replica today (4/33 BOC(6,1) chips need handling)
+    /* acq_integrations  */ 3,                 // 10 ms code -> ~10 dB/epoch, few epochs needed
+    /* acq_fft_factor    */ 1,                 // single-period circular FFT (the 10 ms code is long; halves cost)
     // Tuned for the 10 ms epoch (gnss-sdr has no L1C; values bracketed from its E1 4 ms / L2C 20 ms sets
     // and swept on the Skydel sim). The wide FLL is the key knob: 200 (B*T~2.0) made pull-in intermittently
     // diverge (cos2phi stuck ~0); 30 (B*T~0.3) was too cold to pull in at all; 100 (B*T~1.0) locks 100% of
     // the time, deterministically, cos2phi ~0.92-0.97. The lower narrow set tightens the steady lock.
     /* loop_bw_wide      */ { 3.0, 25.0, 100.0 }, // {dll,pll,fll} pull-in (atan FLL)
     /* loop_bw_narrow    */ { 1.5, 12.0, 20.0 },  // steady state
-    /* frame_sync_timeout_s */ 60.0, // CNAV-2 frame sync lands by ~37 s (1852-symbol window + alignment);
-                                      // generous margin so a real lock is kept while a false lock (no frame
-                                      // sync) is evicted to re-acquire - the standard cross-corr band-aid.
+    /* frame_sync_timeout_s */ 60.0,              // CNAV-2 frame sync lands by ~37 s (1852-symbol window + alignment);
+                                                  // generous margin so a real lock is kept while a false lock (no frame
+                                                  // sync) is evicted to re-acquire - the standard cross-corr band-aid.
 };
 
 Complex_buf Gps_l1c_signal::code_samples( Satellite_id sv, double sample_rate_hz ) const

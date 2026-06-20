@@ -67,10 +67,10 @@ public:
 
     struct Estimate
     {
-        double center_hz;     // Doppler recenter target for the queried carrier (0 = no aiding yet)
-        double half_width_hz; // search half-width to use this attempt (WIDE or NARROW)
-        int    n;             // satellites contributing to the bridge estimate
-        bool   from_pvt;      // true once a PVT clock-drift estimate is set
+        double center_hz;         // Doppler recenter target for the queried carrier (0 = no aiding yet)
+        double half_width_hz;     // search half-width to use this attempt (WIDE or NARROW)
+        int    n;                 // satellites contributing to the bridge estimate
+        bool   from_pvt;          // true once a PVT clock-drift estimate is set
         bool   searchable = true; // false only if an almanac prediction says this SV is below the horizon
     };
 
@@ -138,9 +138,9 @@ private:
         double los_fraction  = 0.0; // predicted line-of-sight Doppler / carrier (geometry only)
     };
 
-    mutable std::mutex mu_;
-    double             sum_fraction_ = 0.0; // sum of doppler/carrier over acquired SVs (bridge)
-    int                n_            = 0;
+    mutable std::mutex        mu_;
+    double                    sum_fraction_ = 0.0; // sum of doppler/carrier over acquired SVs (bridge)
+    int                       n_            = 0;
     std::map<int, Prediction> predictions_;         // per-SV almanac prediction (key = sv_key)
     std::map<int, double>     sv_doppler_fraction_; // per-SV MEASURED Doppler/carrier from a locked sibling
                                                     // (key = sv_key; full observed = LOS + clock)

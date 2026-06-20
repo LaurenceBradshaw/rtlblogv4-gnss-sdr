@@ -144,8 +144,8 @@ TEST_CASE( "klobuchar_realistic_is_positive_and_elevation_monotonic", "[pvt][atm
     const double low  = klobuchar_iono_delay_m( a, b, lat, lon, 10.0 * DEG, az, tow );
     const double high = klobuchar_iono_delay_m( a, b, lat, lon, 80.0 * DEG, az, tow );
     REQUIRE( high > 0.0 );
-    REQUIRE( low > high );           // lower elevation -> larger slant delay
-    REQUIRE( low < 100.0 );          // sane upper bound (m)
+    REQUIRE( low > high );                             // lower elevation -> larger slant delay
+    REQUIRE( low < 100.0 );                            // sane upper bound (m)
     REQUIRE( high > klobuchar_floor_m( 80.0 * DEG ) ); // daytime exceeds the night floor
 }
 #endif

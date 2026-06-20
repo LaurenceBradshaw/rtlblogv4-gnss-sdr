@@ -12,7 +12,9 @@ Iq_constellation_window::Iq_constellation_window(
           code,
           receiver,
           QString::asprintf(
-              "%s%02d %s  I/Q constellation", gui_format::constellation_prefix( constellation ), prn,
+              "%s%02d %s  I/Q constellation",
+              gui_format::constellation_prefix( constellation ),
+              prn,
               gui_format::code_label( code )
           ),
           parent

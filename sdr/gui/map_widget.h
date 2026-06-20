@@ -1,5 +1,4 @@
 #pragma once
-#include <vector>
 #include <QCache>
 #include <QColor>
 #include <QNetworkAccessManager>
@@ -8,6 +7,7 @@
 #include <QSet>
 #include <QString>
 #include <QWidget>
+#include <vector>
 
 // A lightweight slippy map: drag to pan, wheel to zoom down to street level, using OpenStreetMap
 // raster tiles fetched on demand via Qt6Network and cached to disk (so revisited areas need no
@@ -44,11 +44,11 @@ protected:
     void mouseDoubleClickEvent( QMouseEvent* event ) override;
 
 private:
-    QPixmap tile_pixmap( int z, int x, int y );                            // cache lookup; fetches on miss
-    void    request_tile( int z, int x, int y );                           // async network fetch (dedup'd)
+    QPixmap tile_pixmap( int z, int x, int y );  // cache lookup; fetches on miss
+    void    request_tile( int z, int x, int y ); // async network fetch (dedup'd)
     void    screen_to_lonlat( QPointF px, double& lat_deg, double& lon_deg ) const;
-    void    set_center_from_world_px( double world_x, double world_y );    // -> center_lat_/lon_
-    void    update_follow();                                              // dead-zone + eased follow of the fix
+    void    set_center_from_world_px( double world_x, double world_y ); // -> center_lat_/lon_
+    void    update_follow();                                            // dead-zone + eased follow of the fix
 
     // View state
     double center_lat_ = 20.0;

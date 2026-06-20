@@ -20,22 +20,25 @@ struct Acquisition_result
 class Acquisition_engine
 {
 public:
-    // Doppler search step. GNSS-SDRLIB uses 200 Hz, but that leaves up to +/-100 Hz
-    // residual at hand-off - too far for the 2nd-order PLL to pull in without the
-    // phase wrapping (slipping) first. 50 Hz keeps the residual within +/-25 Hz so
-    // the carrier loop locks immediately instead of slipping during pull-in.
-    static constexpr double ACQSTEP   = 200.0;   // Hz - Doppler search step
-    static constexpr double ACQTH     = 3.0;     // peak-ratio threshold            (ACQTH)
-    // Doppler search half-width is now supplied per-attempt by Acquisition_aiding (wide while
-    // bootstrapping, narrow once the common offset is pinned); the grid is allocated for WIDE.
+    static constexpr double ACQTH = 3.0; // peak / second-peak acceptance ratio (GNSS-SDRLIB ACQTH)
+    // The Doppler search STEP is not a free parameter: the FFT-shift carrier wipe (see integrate()) can only
+    // shift the spectrum by whole FFT bins, so the step is the bin width fs/m_ (computed in the ctor as
+    // doppler_step_hz_) and sub-bin Doppler is recovered by parabolic interpolation in check_acquisition().
+    // The search HALF-WIDTH is supplied per-attempt by Acquisition_aiding (wide while bootstrapping, narrow
+    // once the common offset is pinned); the grid is allocated for WIDE.
 
     // prn_code : one code period, Q=0, as returned by Signal::code_samples()
     // sample_rate_hz : front-end sample rate
     // sig : signal physics (chip rate sets the exclusion zone; code period sets the
     //       C/N0 normalisation). PRN-independent - shared across this signal's channels.
     // aiding : receiver-wide Doppler-recenter estimate, read at the start of each attempt.
-    Acquisition_engine( const Complex_buf& prn_code, Satellite_id satellite_id, double sample_rate_hz,
-                        const Signal_params& sig, const Acquisition_aiding& aiding );
+    Acquisition_engine(
+        const Complex_buf&        prn_code,
+        Satellite_id              satellite_id,
+        double                    sample_rate_hz,
+        const Signal_params&      sig,
+        const Acquisition_aiding& aiding
+    );
     ~Acquisition_engine();
 
     // FFTW plans are not copyable
@@ -80,16 +83,16 @@ private:
     std::vector<double> doppler_freqs_; // nfreq_ Doppler hypotheses (Hz, relative to recenter)
     std::vector<double> power_;         // n_ x nfreq_ accumulated correlation power - P in GNSS-SDRLIB
 
-    const Acquisition_aiding& aiding_;          // shared receiver-wide recenter estimate
-    Satellite_id              satellite_id_;    // this channel's SV - for the per-SV almanac aiding query
-    Constellation             constellation_;   // this signal's constellation - ditto
-    double                    carrier_freq_hz_; // this signal's carrier (Hz) - for the aiding query
-    int    doppler_center_bins_; // recenter offset (integer FFT bins), latched per attempt
-    int    active_half_bins_;    // searched half-width (bins each side of centre), latched per attempt
+    const Acquisition_aiding& aiding_;                  // shared receiver-wide recenter estimate
+    Satellite_id              satellite_id_;            // this channel's SV - for the per-SV almanac aiding query
+    Constellation             constellation_;           // this signal's constellation - ditto
+    double                    carrier_freq_hz_;         // this signal's carrier (Hz) - for the aiding query
+    int                       doppler_center_bins_ = 0; // recenter offset (integer FFT bins), latched per attempt
+    int                       active_half_bins_    = 0; // searched half-width (bins each side of centre), latched per attempt
 
-    Acquisition_result result_;
-    int                intg_count_;
-    int                target_integrations_; // non-coherent epochs per attempt (sig.acq_integrations)
+    Acquisition_result result_ {};
+    int                intg_count_ = 0;
+    int                target_integrations_; // non-coherent epochs per attempt (sig.acq_integrations), ctor-set
 
     int    n_;               // nsamp - samples per code period
     int    m_;               // nfft = acq_fft_factor * n_ - FFT / correlation size

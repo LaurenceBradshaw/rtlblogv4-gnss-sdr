@@ -59,7 +59,7 @@ Acquisition_aiding::Estimate Acquisition_aiding::estimate( double carrier_hz ) c
 Acquisition_aiding::Estimate Acquisition_aiding::estimate( Constellation con, int prn, double carrier_hz ) const
 {
     std::lock_guard<std::mutex> lk( mu_ );
-    const int key = sv_key( con, prn );
+    const int                   key = sv_key( con, prn );
 
     // (1) MEASURED sibling Doppler (highest precedence): another channel has this SV cleanly locked, so its
     // full observed Doppler/carrier is the best center - scale by this carrier. A live sibling lock proves
@@ -99,7 +99,7 @@ void Acquisition_aiding::report_sv_doppler( Constellation con, int prn, double d
 bool Acquisition_aiding::sv_doppler_fraction( Constellation con, int prn, double& fraction_out ) const
 {
     std::lock_guard<std::mutex> lk( mu_ );
-    const auto it = sv_doppler_fraction_.find( sv_key( con, prn ) );
+    const auto                  it = sv_doppler_fraction_.find( sv_key( con, prn ) );
     if( it == sv_doppler_fraction_.end() )
     {
         return false;
@@ -111,7 +111,7 @@ bool Acquisition_aiding::sv_doppler_fraction( Constellation con, int prn, double
 bool Acquisition_aiding::searchable( Constellation con, int prn ) const
 {
     std::lock_guard<std::mutex> lk( mu_ );
-    const auto it = predictions_.find( sv_key( con, prn ) );
+    const auto                  it = predictions_.find( sv_key( con, prn ) );
     return it == predictions_.end() || it->second.above_horizon; // unknown SV stays searchable
 }
 

@@ -4,9 +4,9 @@
 namespace orbit
 {
 
-static constexpr double OMEGA_E_DOT     = 7.2921151467e-5; // Earth's rotation rate (rad/s) - GPS & Galileo
-static constexpr double C               = 299792458.0;     // Speed of light (m/s)
-static constexpr double SECONDS_PER_WEEK = 604800.0;       // seconds in a (GPS/Galileo/BeiDou) week
+static constexpr double OMEGA_E_DOT      = 7.2921151467e-5; // Earth's rotation rate (rad/s) - GPS & Galileo
+static constexpr double C                = 299792458.0;     // Speed of light (m/s)
+static constexpr double SECONDS_PER_WEEK = 604800.0;        // seconds in a (GPS/Galileo/BeiDou) week
 
 // Gravitational parameter mu (m^3/s^2) per constellation's reference frame.
 static double constellation_mu( Constellation c )

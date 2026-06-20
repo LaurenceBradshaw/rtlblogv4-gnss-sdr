@@ -1,6 +1,6 @@
 #pragma once
-#include <vector>
 #include <QMainWindow>
+#include <vector>
 #include "receiver_view.h"
 
 class QTabWidget;

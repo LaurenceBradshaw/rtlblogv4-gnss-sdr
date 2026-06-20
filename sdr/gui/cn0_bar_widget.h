@@ -1,9 +1,9 @@
 #pragma once
-#include <vector>
 #include <QColor>
 #include <QRectF>
 #include <QString>
 #include <QWidget>
+#include <vector>
 
 // A C/N0 bar chart for the Satellites panel: one vertical bar per tracking satellite, height
 // proportional to its carrier-to-noise density (dB-Hz), coloured by constellation. Hovering a bar
@@ -32,6 +32,6 @@ protected:
     bool event( QEvent* event ) override; // tooltip hit-testing
 
 private:
-    std::vector<Bar>     bars_;
-    std::vector<QRectF>  bar_rects_; // screen rects from the last paint, parallel to bars_
+    std::vector<Bar>    bars_;
+    std::vector<QRectF> bar_rects_; // screen rects from the last paint, parallel to bars_
 };

@@ -1,7 +1,7 @@
 #include "receiver.h"
+#include <fmt/format.h>
 #include <chrono>
 #include <cmath>
-#include <fmt/format.h>
 #include <thread>
 #include "geodesy.h"
 #include "logging.h"
@@ -143,15 +143,15 @@ void Receiver::setup()
     // The SOURCE runs at config_.sample_rate_hz; the rest of the pipeline runs at the (optionally
     // decimated) PROCESSING rate. The Fir_decimator sits in the streaming callback (device -> decimator
     // -> buffer), so the buffer, channels, scheduler and timing all use the processing rate.
-    const uint32_t decim         = std::max( 1u, config_.decimation );
-    const uint32_t native_rate   = config_.sample_rate_hz;
+    const uint32_t decim          = std::max( 1u, config_.decimation );
+    const uint32_t native_rate    = config_.sample_rate_hz;
     const uint32_t sample_rate_hz = native_rate / decim; // processing rate
     decimator_                    = decim > 1 ? std::make_unique<Fir_decimator>( static_cast<int>( decim ) ) : nullptr;
 
     // Buffer must hold at least 2 s of samples so that push()'s 1 s sleep
     // (see sample_buffer.cpp) always wakes up to find meaningful space freed.
     const size_t buffer_capacity = next_power_of_two( 2 * static_cast<size_t>( sample_rate_hz ) );
-    sample_buffer_ = std::make_unique<Sample_buffer>( buffer_capacity, static_cast<double>( sample_rate_hz ) );
+    sample_buffer_               = std::make_unique<Sample_buffer>( buffer_capacity, static_cast<double>( sample_rate_hz ) );
 
     // Source: live RTL-SDR or recorded file, behind the Stream_device interface.
     std::string source_desc;
@@ -177,8 +177,14 @@ void Receiver::setup()
             fmt::format(
                 "RTL-SDR dev {}: requested rate {} Hz -> device {} Hz | centre {} Hz | tuner gain {:.1f} dB{} | "
                 "processing rate {} Hz (decim {})",
-                config_.device_index, native_rate, rtl->sample_rate_hz(), rtl->centre_freq_hz(),
-                rtl->tuner_gain_tenths_db() / 10.0, ( config_.gain_db < 0.0 ) ? " [AGC]" : "", sample_rate_hz, decim
+                config_.device_index,
+                native_rate,
+                rtl->sample_rate_hz(),
+                rtl->centre_freq_hz(),
+                rtl->tuner_gain_tenths_db() / 10.0,
+                ( config_.gain_db < 0.0 ) ? " [AGC]" : "",
+                sample_rate_hz,
+                decim
             )
         );
         source_desc = fmt::format( "RTL-SDR device {} (centre {} Hz)", config_.device_index, GNSS_L1_HZ );
@@ -201,9 +207,9 @@ void Receiver::setup()
     // N workers does the correlation work; the Scheduler hands ready channels to it.
     for( size_t i = 0; i < signals_.size(); ++i )
     {
-        const Signal&             sig         = *signals_[i];
-        const std::set<int>&      prn_filter  = signal_selection_[i].prns;
-        const auto [sv_lo, sv_hi]             = sig.sv_range();
+        const Signal&        sig        = *signals_[i];
+        const std::set<int>& prn_filter = signal_selection_[i].prns;
+        const auto [sv_lo, sv_hi]       = sig.sv_range();
         for( int sv = sv_lo; sv <= sv_hi; sv++ )
         {
             if( !prn_selected( prn_filter, sv ) )
@@ -214,9 +220,9 @@ void Receiver::setup()
             {
                 continue; // SV doesn't transmit this signal - don't waste a channel that can never lock
             }
-            channels_.push_back( std::make_unique<Channel>(
-                sig, static_cast<Satellite_id>( sv ), sample_rate_hz, *sample_buffer_, aiding_
-            ) );
+            channels_.push_back(
+                std::make_unique<Channel>( sig, static_cast<Satellite_id>( sv ), sample_rate_hz, *sample_buffer_, aiding_ )
+            );
         }
     }
 
@@ -224,9 +230,8 @@ void Receiver::setup()
     for( const Signal_selection& s : signal_selection_ )
     {
         const std::string prns = s.prns.empty() ? "all" : fmt::format( "{}", s.prns.size() );
-        sig_list += fmt::format(
-            "{}{}:{}({} PRNs)", sig_list.empty() ? "" : ", ", signal_token( s.id ), signal_name( s.id ), prns
-        );
+        sig_list +=
+            fmt::format( "{}{}:{}({} PRNs)", sig_list.empty() ? "" : ", ", signal_token( s.id ), signal_name( s.id ), prns );
     }
     const std::string rate_desc = decim > 1
                                       ? fmt::format( "{} Hz (decimated /{} from {} Hz)", sample_rate_hz, decim, native_rate )
@@ -285,8 +290,8 @@ void Receiver::run()
     // The buffer + channels run at the PROCESSING rate (after any decimation); the device still streams
     // at the native rate. So sample-index -> time uses the processing rate, but the device's consumed
     // count (native samples) divides by the native rate to give wall seconds.
-    const double native_rate_hz   = static_cast<double>( config_.sample_rate_hz );
-    const double sample_rate_hz   = native_rate_hz / std::max( 1u, config_.decimation );
+    const double native_rate_hz = static_cast<double>( config_.sample_rate_hz );
+    const double sample_rate_hz = native_rate_hz / std::max( 1u, config_.decimation );
 
     constexpr auto TICK_INTERVAL = std::chrono::milliseconds( 100 );
     constexpr int  LOG_EVERY_N   = 10;
@@ -298,16 +303,19 @@ void Receiver::run()
     const auto wall_start = std::chrono::steady_clock::now();
 
     // Decimator layer (if enabled) sits here, between the source and the buffer: device -> decimator -> buffer.
-    device_->start_streaming( [this]( const Complex_buf& samples ) {
-        if( decimator_ )
+    device_->start_streaming(
+        [this]( const Complex_buf& samples )
         {
-            sample_buffer_->push( decimator_->process( samples ) );
+            if( decimator_ )
+            {
+                sample_buffer_->push( decimator_->process( samples ) );
+            }
+            else
+            {
+                sample_buffer_->push( samples );
+            }
         }
-        else
-        {
-            sample_buffer_->push( samples );
-        }
-    } );
+    );
 
     std::optional<Position_solution> current_position = std::nullopt;
     int                              tick             = 0;
@@ -316,9 +324,9 @@ void Receiver::run()
         std::this_thread::sleep_for( TICK_INTERVAL );
 
         // Feed the previous fix in so iono/tropo corrections can use it (off until one exists).
-        const Ecef user_ecef =
-            current_position ? Ecef { current_position->ecef_x_m, current_position->ecef_y_m, current_position->ecef_z_m }
-                             : Ecef {};
+        const Ecef user_ecef = current_position
+                                   ? Ecef { current_position->ecef_x_m, current_position->ecef_y_m, current_position->ecef_z_m }
+                                   : Ecef {};
         obs_engine_.generate(
             channel_ptrs_, scheduler_->min_next_sample(), sample_rate_hz, current_position ? &user_ecef : nullptr
         );
@@ -330,7 +338,7 @@ void Receiver::run()
         // processed position (what is actually correlated).
         const Receiver_status status {
             std::chrono::duration<double>( std::chrono::steady_clock::now() - wall_start ).count(),
-            static_cast<double>( device_->samples_consumed() ) / native_rate_hz, // source (native) seconds streamed
+            static_cast<double>( device_->samples_consumed() ) / native_rate_hz,   // source (native) seconds streamed
             static_cast<double>( scheduler_->min_next_sample() ) / sample_rate_hz, // channel position (processing rate)
         };
 
@@ -390,7 +398,9 @@ void Receiver::run()
                     if( current_position->isb_present[c] )
                     {
                         ref_isb += fmt::format(
-                            "  isb[{}]={:.1f} m", constellation_name( static_cast<Constellation>( c ) ), current_position->isb_m[c]
+                            "  isb[{}]={:.1f} m",
+                            constellation_name( static_cast<Constellation>( c ) ),
+                            current_position->isb_m[c]
                         );
                     }
                 }
@@ -543,8 +553,7 @@ void Receiver::subscribe_history( Constellation constellation, int prn, Code cod
     }
 }
 
-std::optional<Tracking_history::Snapshot>
-Receiver::published_history( Constellation constellation, int prn, Code code ) const
+std::optional<Tracking_history::Snapshot> Receiver::published_history( Constellation constellation, int prn, Code code ) const
 {
     std::lock_guard<std::mutex> lock( state_mutex_ );
     if( auto it = published_histories_.find( history_key( constellation, prn, code ) ); it != published_histories_.end() )

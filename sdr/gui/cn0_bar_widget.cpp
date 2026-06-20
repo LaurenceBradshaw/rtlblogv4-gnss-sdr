@@ -1,17 +1,17 @@
 #include "cn0_bar_widget.h"
-#include <algorithm>
 #include <QHelpEvent>
 #include <QPainter>
 #include <QToolTip>
+#include <algorithm>
 
 namespace
 {
-constexpr double CN0_MAX     = 55.0; // dB-Hz top of the scale (typical strong-signal ceiling)
-constexpr double CN0_STEP    = 10.0; // gridline spacing
-constexpr int    MARGIN_L    = 34;   // room for the Y-axis labels
-constexpr int    MARGIN_B    = 32;   // room for the two-line SV + code labels
-constexpr int    MARGIN_T    = 8;
-constexpr int    MARGIN_R    = 8;
+constexpr double CN0_MAX      = 55.0; // dB-Hz top of the scale (typical strong-signal ceiling)
+constexpr double CN0_STEP     = 10.0; // gridline spacing
+constexpr int    MARGIN_L     = 34;   // room for the Y-axis labels
+constexpr int    MARGIN_B     = 32;   // room for the two-line SV + code labels
+constexpr int    MARGIN_T     = 8;
+constexpr int    MARGIN_R     = 8;
 constexpr double BAR_GAP_FRAC = 0.25; // fraction of each slot left as gap
 } // namespace
 

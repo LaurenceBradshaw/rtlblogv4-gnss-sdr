@@ -13,16 +13,16 @@
 // ephemeris + the latest fix. Only satellites with a usable ephemeris and an available fix appear.
 struct Sky_satellite
 {
-    Constellation constellation  = Constellation::Unknown;
-    int           satellite_id   = 0;
-    double        azimuth_deg    = 0.0; // clockwise from true north
-    double        elevation_deg  = 0.0; // above the local horizon
-    double        cn0_db_hz      = 0.0;
-    bool          has_lock       = false;
+    Constellation constellation = Constellation::Unknown;
+    int           satellite_id  = 0;
+    double        azimuth_deg   = 0.0; // clockwise from true north
+    double        elevation_deg = 0.0; // above the local horizon
+    double        cn0_db_hz     = 0.0;
+    bool          has_lock      = false;
     // Sub-satellite ground point (nadir lat/lon) - where the SV sits on the map. Far from the
     // receiver (the orbit is ~20 000 km up), so only visible when zoomed out.
-    double        sub_lat_deg    = 0.0;
-    double        sub_lon_deg    = 0.0;
+    double sub_lat_deg = 0.0;
+    double sub_lon_deg = 0.0;
 };
 
 struct Gui_frame

@@ -15,7 +15,9 @@ Doppler_graph_window::Doppler_graph_window(
           code,
           receiver,
           QString::asprintf(
-              "%s%02d %s  Carrier Doppler", gui_format::constellation_prefix( constellation ), prn,
+              "%s%02d %s  Carrier Doppler",
+              gui_format::constellation_prefix( constellation ),
+              prn,
               gui_format::code_label( code )
           ),
           parent

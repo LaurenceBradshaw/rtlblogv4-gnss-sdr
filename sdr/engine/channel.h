@@ -45,7 +45,7 @@ struct Channel_snapshot
     double       wavelength_m         = 0.0; // c / carrier frequency (constant; cached for convenience)
 
     Ephemeris eph;  // broadcast orbit/clock (base fields are all the orbit model needs)
-    Iono  iono; // broadcast Klobuchar iono (iono.valid false unless this SV decoded SF4 p18)
+    Iono      iono; // broadcast Klobuchar iono (iono.valid false unless this SV decoded SF4 p18)
 
     // Project the snapshotted SV transmit time forward/back to the common observation sample. The transmit
     // clock does NOT advance 1:1 with receiver time: from pr = (t_rx - t_tx)*c with d(pr)/dt_rx = range_rate,
@@ -193,8 +193,7 @@ private:
     // short and integrate() read past it -> segfault.
     size_t acq_block() const
     {
-        return static_cast<size_t>( signal_.params().acq_fft_factor )
-             * static_cast<size_t>( std::llround( EPOCH_SAMPLES ) );
+        return static_cast<size_t>( signal_.params().acq_fft_factor ) * static_cast<size_t>( std::llround( EPOCH_SAMPLES ) );
     }
 
     const Signal&                signal_;
@@ -214,9 +213,9 @@ private:
     Sample_index                 track_start_sample_ = 0;   // next_sample_ at tracking handoff (frame-sync timeout)
     // Cross-code/-frequency Doppler aiding throttles (see process_tracking): when this channel last published
     // its measured Doppler (donor) and last re-centered its NCO from a sibling (recipient).
-    Sample_index                 last_aid_report_sample_ = 0;
-    Sample_index                 last_nudge_sample_      = 0;
-    Tracking_history             history_;                  // per-epoch graph history (prompt I/Q, ...)
+    Sample_index     last_aid_report_sample_ = 0;
+    Sample_index     last_nudge_sample_      = 0;
+    Tracking_history history_; // per-epoch graph history (prompt I/Q, ...)
 
     // Acquisition back-off (#1): after a full attempt finds nothing, don't retry
     // until retry_after_, with exponentially growing cooldown. Written by the owning
@@ -229,7 +228,7 @@ private:
     // Coherent observable snapshot: written by the owning worker (publish_snapshot), read by other
     // threads (snapshot()). A mutex - not a lock-free seqlock - because publish/read are infrequent
     // (per quantum / per tick) and brief (a small struct copy), so contention is negligible.
-    Channel_snapshot           snapshot_;
+    Channel_snapshot       snapshot_;
     std::map<int, Almanac> published_almanac_; // decoded almanac, published under snapshot_mutex_
-    mutable std::mutex         snapshot_mutex_;
+    mutable std::mutex     snapshot_mutex_;
 };

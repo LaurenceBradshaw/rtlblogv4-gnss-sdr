@@ -71,9 +71,9 @@ void Gps_l1c_decoder::build_sf1_templates()
         for( int i = 0; i < SF1_SYMS - 1; i++ ) // 51 LFSR symbols
         {
             // PocketSDR maps CHIP=(1,-1): bit = (CHIP[R&1]+1)/2 = !(R&1). Then XOR the TOI MSB.
-            const uint8_t b = static_cast<uint8_t>( ( R & 1u ) ^ 1u );
+            const uint8_t b  = static_cast<uint8_t>( ( R & 1u ) ^ 1u );
             sf1_[toi][1 + i] = b ^ bit9;
-            R = ( static_cast<uint32_t>( __builtin_parity( R & TAP ) ) << 7 ) | ( R >> 1 );
+            R                = ( static_cast<uint32_t>( __builtin_parity( R & TAP ) ) << 7 ) | ( R >> 1 );
         }
     }
 }
@@ -97,8 +97,8 @@ Gps_l1c_decoder::Gps_l1c_decoder( Satellite_id prn )
 // alignment (floor ~10-13 mismatches) is rejected.
 int Gps_l1c_decoder::match_frame( const uint8_t* w, int toi ) const
 {
-    const auto& SF1 = sf1_[toi];
-    const auto& SFn = sf1_[( toi + 1 ) % N_TOI];
+    const auto& SF1        = sf1_[toi];
+    const auto& SFn        = sf1_[( toi + 1 ) % N_TOI];
     int         miss_first = 0, miss_last = 0; // mismatches assuming NORMAL polarity
     for( int i = 0; i < SF1_SYMS; i++ )
     {
@@ -131,14 +131,18 @@ bool Gps_l1c_decoder::decode_frame( const uint8_t* w )
     }
     std::array<uint8_t, 600> sf2;
     std::array<uint8_t, 274> sf3;
-    const bool ldpc2 = gps::l1c::ldpc::decode_sf2( deint.data(), sf2.data() );        // deint[0..1199]
-    const bool ldpc3 = gps::l1c::ldpc::decode_sf3( deint.data() + 1200, sf3.data() ); // deint[1200..1747]
-    const bool ok    = ldpc2 && ldpc3 && crc24q( sf2.data(), 600 ) == 0 && crc24q( sf3.data(), 274 ) == 0;
+    const bool               ldpc2 = gps::l1c::ldpc::decode_sf2( deint.data(), sf2.data() );        // deint[0..1199]
+    const bool               ldpc3 = gps::l1c::ldpc::decode_sf3( deint.data() + 1200, sf3.data() ); // deint[1200..1747]
+    const bool               ok    = ldpc2 && ldpc3 && crc24q( sf2.data(), 600 ) == 0 && crc24q( sf3.data(), 274 ) == 0;
     logging::log(
         logging::Level::Info,
         fmt::format(
-            "Navigation - GPS L1C PRN {:2d}  CNAV-2 frame TOI={:d} {} (ldpc {}/{})", satellite_id_, toi_,
-            ok ? "DECODED OK" : "CRC FAIL", ldpc2 ? 1 : 0, ldpc3 ? 1 : 0
+            "Navigation - GPS L1C PRN {:2d}  CNAV-2 frame TOI={:d} {} (ldpc {}/{})",
+            satellite_id_,
+            toi_,
+            ok ? "DECODED OK" : "CRC FAIL",
+            ldpc2 ? 1 : 0,
+            ldpc3 ? 1 : 0
         )
     );
     if( ok )
@@ -155,15 +159,15 @@ bool Gps_l1c_decoder::decode_frame( const uint8_t* w )
 void Gps_l1c_decoder::parse_sf2( const uint8_t* s )
 {
     constexpr double PI      = 3.14159265358979323846;
-    constexpr double AREF    = 26559710.0;        // semi-major axis reference (m)
-    constexpr double ODOTREF = -2.6e-9 * PI;      // OmegaDot reference (rad/s)
+    constexpr double AREF    = 26559710.0;   // semi-major axis reference (m)
+    constexpr double ODOTREF = -2.6e-9 * PI; // OmegaDot reference (rad/s)
     auto             p2      = []( int n ) { return std::ldexp( 1.0, -n ); };
 
     eph_.constellation = Constellation::Gps;
     eph_.prn           = satellite_id_;
-    eph_.week          = static_cast<int>( bu( s, 0, 13 ) );          // WN
-    eph_.toe           = static_cast<double>( bu( s, 38, 11 ) ) * 300.0; // tOE
-    eph_.toc           = eph_.toe;                                    // CNAV-2 clock ref = toe
+    eph_.week          = static_cast<int>( bu( s, 0, 13 ) );                      // WN
+    eph_.toe           = static_cast<double>( bu( s, 38, 11 ) ) * 300.0;          // tOE
+    eph_.toc           = eph_.toe;                                                // CNAV-2 clock ref = toe
     const double A     = AREF + static_cast<double>( bs( s, 49, 26 ) ) * p2( 9 ); // dA
     eph_.sqrt_a        = std::sqrt( A );
     eph_.delta_n       = static_cast<double>( bs( s, 100, 17 ) ) * p2( 44 ) * PI;
@@ -257,8 +261,7 @@ void Gps_l1c_decoder::process( double prompt_i, double /*prompt_i_prev*/ )
             {
                 frame_synced_ = false; // failed re-confirm -> drop (the search re-establishes sync)
                 logging::log(
-                    logging::Level::Info,
-                    fmt::format( "Navigation - GPS L1C PRN {:2d}  CNAV-2 frame sync LOST", satellite_id_ )
+                    logging::Level::Info, fmt::format( "Navigation - GPS L1C PRN {:2d}  CNAV-2 frame sync LOST", satellite_id_ )
                 );
             }
         }
@@ -278,7 +281,9 @@ void Gps_l1c_decoder::process( double prompt_i, double /*prompt_i_prev*/ )
             logging::log(
                 logging::Level::Info,
                 fmt::format(
-                    "Navigation - GPS L1C PRN {:2d}  CNAV-2 frame sync TOI={:d} ({})", satellite_id_, toi,
+                    "Navigation - GPS L1C PRN {:2d}  CNAV-2 frame sync TOI={:d} ({})",
+                    satellite_id_,
+                    toi,
                     r == 1 ? "normal" : "reversed"
                 )
             );

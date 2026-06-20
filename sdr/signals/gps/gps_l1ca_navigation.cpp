@@ -213,15 +213,15 @@ static int decode_almanac( const uint8_t* buf, int sfn, int week, std::map<int, 
     Almanac a;
     a.constellation = Constellation::Gps;
     a.prn           = static_cast<Satellite_id>( svid );
-    a.e        = getbitu( buf, 68, 16 ) * P2_21;
-    a.toa      = getbitu( buf, 90, 8 ) * 4096.0;                    // 2^12
-    a.i0       = ( 0.3 + getbits( buf, 98, 16 ) * P2_19 ) * SC2RAD; // 0.3 semicircles reference + delta_i
-    a.omegadot = getbits( buf, 120, 16 ) * P2_38 * SC2RAD;
-    a.health   = static_cast<int>( getbitu( buf, 136, 8 ) );
-    a.sqrt_a   = getbitu( buf, 150, 24 ) * P2_11;
-    a.omega0   = getbits( buf, 180, 24 ) * P2_23 * SC2RAD;
-    a.omega    = getbits( buf, 210, 24 ) * P2_23 * SC2RAD;
-    a.m0       = getbits( buf, 240, 24 ) * P2_23 * SC2RAD;
+    a.e             = getbitu( buf, 68, 16 ) * P2_21;
+    a.toa           = getbitu( buf, 90, 8 ) * 4096.0;                    // 2^12
+    a.i0            = ( 0.3 + getbits( buf, 98, 16 ) * P2_19 ) * SC2RAD; // 0.3 semicircles reference + delta_i
+    a.omegadot      = getbits( buf, 120, 16 ) * P2_38 * SC2RAD;
+    a.health        = static_cast<int>( getbitu( buf, 136, 8 ) );
+    a.sqrt_a        = getbitu( buf, 150, 24 ) * P2_11;
+    a.omega0        = getbits( buf, 180, 24 ) * P2_23 * SC2RAD;
+    a.omega         = getbits( buf, 210, 24 ) * P2_23 * SC2RAD;
+    a.m0            = getbits( buf, 240, 24 ) * P2_23 * SC2RAD;
     // af0 (11-bit, signed) is split: 8 MSBs at 270, 3 LSBs at 289 (af1 sits between). Mirror RTKLIB exactly.
     const int af0_8 = static_cast<int>( getbits( buf, 270, 8 ) );
     a.af1           = getbits( buf, 278, 11 ) * P2_38;

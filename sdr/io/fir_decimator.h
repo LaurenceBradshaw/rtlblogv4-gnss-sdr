@@ -21,8 +21,14 @@ public:
     // first (num_taps-1) input samples warm up the filter before any output is produced.
     Complex_buf process( const Complex_buf& in );
 
-    int                       factor() const { return factor_; }
-    const std::vector<float>& taps() const { return taps_; }
+    int factor() const
+    {
+        return factor_;
+    }
+    const std::vector<float>& taps() const
+    {
+        return taps_;
+    }
 
 private:
     int                factor_;

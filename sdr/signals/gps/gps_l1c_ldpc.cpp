@@ -8,7 +8,7 @@ namespace gps::l1c::ldpc
 namespace
 {
 constexpr int    MAX_ITER = 250;
-constexpr double ERR_PROB = 1e-5;                            // assumed hard-symbol error probability
+constexpr double ERR_PROB = 1e-5;                                      // assumed hard-symbol error probability
 const double     LCH      = std::log( ( 1.0 - ERR_PROB ) / ERR_PROB ); // |channel LLR| for a hard symbol
 
 // Sparse parity-check matrix as bipartite adjacency: which variable nodes each check touches, and which
@@ -18,16 +18,14 @@ struct Ldpc_code
     int                           m = 0, n = 0; // checks, codeword length
     std::vector<std::vector<int>> chk_edges;    // edge ids per check
     std::vector<std::vector<int>> var_edges;    // edge ids per variable
-    std::vector<int>              e_var;         // variable node of each edge
-    std::vector<int>              e_chk;         // check node of each edge
+    std::vector<int>              e_var;        // variable node of each edge
+    std::vector<int>              e_chk;        // check node of each edge
     bool                          built = false;
 };
 
 // Add the 1-positions of a sub-table at (row_off + r-1, col_off + c-1). Mirrors gen_B_LDPC_H.
 template <size_t N>
-void add_block(
-    std::vector<std::pair<int, int>>& ones, const uint16_t ( &tbl )[N][2], int row_off, int col_off
-)
+void add_block( std::vector<std::pair<int, int>>& ones, const uint16_t ( &tbl )[N][2], int row_off, int col_off )
 {
     for( size_t i = 0; i < N; i++ )
     {
@@ -57,8 +55,14 @@ void build( Ldpc_code& c, int m, int n, int g, const std::vector<std::pair<int, 
 // E at (m-g,m+g); T at (0,m+g). g is the gap (1 for CNAV-2).
 template <size_t NA, size_t NB, size_t NC, size_t ND, size_t NE, size_t NT>
 Ldpc_code make_code(
-    int m, int n, int g, const uint16_t ( &A )[NA][2], const uint16_t ( &B )[NB][2],
-    const uint16_t ( &C )[NC][2], const uint16_t ( &D )[ND][2], const uint16_t ( &E )[NE][2],
+    int m,
+    int n,
+    int g,
+    const uint16_t ( &A )[NA][2],
+    const uint16_t ( &B )[NB][2],
+    const uint16_t ( &C )[NC][2],
+    const uint16_t ( &D )[ND][2],
+    const uint16_t ( &E )[NE][2],
     const uint16_t ( &T )[NT][2]
 )
 {
@@ -77,16 +81,14 @@ Ldpc_code make_code(
 
 const Ldpc_code& sf2_code()
 {
-    static const Ldpc_code c = make_code(
-        600, 1200, 1, H_CNV2_SF2_A, H_CNV2_SF2_B, H_CNV2_SF2_C, H_CNV2_SF2_D, H_CNV2_SF2_E, H_CNV2_SF2_T
-    );
+    static const Ldpc_code c =
+        make_code( 600, 1200, 1, H_CNV2_SF2_A, H_CNV2_SF2_B, H_CNV2_SF2_C, H_CNV2_SF2_D, H_CNV2_SF2_E, H_CNV2_SF2_T );
     return c;
 }
 const Ldpc_code& sf3_code()
 {
-    static const Ldpc_code c = make_code(
-        274, 548, 1, H_CNV2_SF3_A, H_CNV2_SF3_B, H_CNV2_SF3_C, H_CNV2_SF3_D, H_CNV2_SF3_E, H_CNV2_SF3_T
-    );
+    static const Ldpc_code c =
+        make_code( 274, 548, 1, H_CNV2_SF3_A, H_CNV2_SF3_B, H_CNV2_SF3_C, H_CNV2_SF3_D, H_CNV2_SF3_E, H_CNV2_SF3_T );
     return c;
 }
 

@@ -4,28 +4,24 @@
 #include <limits>
 
 // constructor
-// mirrors GNSS-SDRLIB initsdrch() + initacqstruct():
-//
-//   acq->intg   = ACQINTG_L1CA;
-//   acq->step   = ACQSTEP;
-//   acq->nfreq  = 2*(ACQHBAND/ACQSTEP)+1;
-//   acq->nfft   = 2*nsamp;
-//
+// Builds the (PRN-independent) acquisition state once per channel: the Doppler grid and the pre-conjugated
+// code FFT. The code-FFT prep mirrors GNSS-SDRLIB initsdrch():
 //   for (i=0; i<nfft; i++) rcode[i] = 0;      // zero-pad
 //   rescode(..., nsamp, rcode);                 // fills first nsamp chips
 //   cpxcpx(rcode, NULL, 1.0, nfft, xcode);     // real -> complex, Q=0
 //   cpxfft(NULL, xcode, nfft);                  // FFT in-place
+// The Doppler grid differs deliberately: GNSS-SDRLIB steps by a fixed ACQSTEP, we step by the FFT bin width
+// (the FFT-shift carrier wipe in integrate() only allows whole-bin shifts) - see the header.
 Acquisition_engine::Acquisition_engine(
-    const Complex_buf& prn_code, Satellite_id satellite_id, double sample_rate_hz, const Signal_params& sig,
+    const Complex_buf&        prn_code,
+    Satellite_id              satellite_id,
+    double                    sample_rate_hz,
+    const Signal_params&      sig,
     const Acquisition_aiding& aiding
 )
     : aiding_( aiding ),
       satellite_id_( satellite_id ),
-      constellation_( sig.constellation ),
-      doppler_center_bins_( 0 ),
-      active_half_bins_( 0 ),
-      result_ {},
-      intg_count_( 0 )
+      constellation_( sig.constellation )
 {
     n_                   = static_cast<int>( prn_code.size() );
     m_                   = sig.acq_fft_factor * n_; // nfft (factor 2 = zero-padded, 1 = circular)
@@ -124,9 +120,9 @@ bool Acquisition_engine::integrate( const Sample_block& block )
     for( int i = 0; i < m_; i++ )
     {
         const size_t ui = static_cast<size_t>( i );
-        data_fft_[i]    = ui >= avail            ? Complex_sample( 0.0f, 0.0f )
-                          : ui < block.len1      ? block.ptr1[i]
-                                                 : block.ptr2[ui - block.len1];
+        data_fft_[i]    = ui >= avail       ? Complex_sample( 0.0f, 0.0f )
+                          : ui < block.len1 ? block.ptr1[i]
+                                            : block.ptr2[ui - block.len1];
     }
     auto* fd = reinterpret_cast<fftwf_complex*>( data_fft_.data() );
     fftwf_execute_dft( fft_plan_, fd, fd );
@@ -281,10 +277,10 @@ bool Acquisition_engine::check_acquisition()
     const double peakr = maxP / maxP2;
     const double cn0   = 10.0 * std::log10( maxP / meanP / ctime_ );
 
-    // Sub-bin Doppler refinement: parabolic interpolation of the power peak across
-    // the three Doppler bins at the winning code phase. A 50 Hz grid otherwise
-    // leaves +/-25 Hz residual at hand-off, too far for the 2nd-order PLL to pull in
-    // without spinning; interpolation tightens it to ~+/-5-10 Hz for free.
+    // Sub-bin Doppler refinement: parabolic interpolation of the power peak across the three Doppler bins at
+    // the winning code phase. The grid step is the FFT bin width (doppler_step_hz_), which alone leaves up to
+    // +/-half-a-bin residual at hand-off - too far for the 2nd-order PLL to pull in without spinning;
+    // interpolation tightens it to a fraction of a bin for free.
     // doppler_freqs_ is relative to the search centre; add the latched recenter offset.
     double doppler = doppler_freqs_[freqi] + doppler_center_bins_ * doppler_step_hz_;
     if( freqi > 0 && freqi < nfreq_ - 1 )
@@ -310,9 +306,9 @@ bool Acquisition_engine::check_acquisition()
 }
 
 #ifdef ENABLE_UNIT_TESTS
-#include <cstdint>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
 #include "cttc_gps_l1_snippet.h"
 
 namespace
@@ -346,9 +342,9 @@ TEST_CASE( "acquisition_synthetic_gps_signal", "[acquisition][gps]" )
     const Complex_buf code = sig->code_samples( /*prn=*/1, ACQ_FS );
     const int         m    = sig->params().acq_fft_factor * static_cast<int>( code.size() );
 
-    const int    inject_phase   = 137;
-    const double inject_doppler = 2000.0;
-    const Complex_buf blk = synth_block( code, m, inject_phase, inject_doppler );
+    const int         inject_phase   = 137;
+    const double      inject_doppler = 2000.0;
+    const Complex_buf blk            = synth_block( code, m, inject_phase, inject_doppler );
 
     Acquisition_aiding aiding;
     Acquisition_engine acq( code, 1, ACQ_FS, sig->params(), aiding );

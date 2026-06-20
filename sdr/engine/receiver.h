@@ -26,16 +26,16 @@ class Scheduler;
 // but is decoupled from cxxopts so the receiver can be constructed from a GUI, a test, etc.
 struct Receiver_config
 {
-    bool             use_rtlsdr     = false;
-    std::string      file_path;                              // file source
-    uint32_t         sample_rate_hz = 2048000;               // SOURCE (native) rate
+    bool             use_rtlsdr = false;
+    std::string      file_path;                                // file source
+    uint32_t         sample_rate_hz = 2048000;                 // SOURCE (native) rate
     Iq_sample_format format         = Iq_sample_format::INT16; // file source
     int              device_index   = 0;                       // RTL-SDR
     double           gain_db        = -1.0;                    // RTL-SDR; <0 => hardware AGC
     // FIR-decimate the source by this integer factor before processing (1 = none). The whole pipeline
     // then runs at sample_rate_hz / decimation - cheaper, and lets a high-rate capture (e.g. 25 MHz)
     // run near real time. The fractional rate that an indivisible factor leaves is harmless.
-    uint32_t         decimation     = 1;
+    uint32_t decimation = 1;
 
     // Which signals to search, each with its own PRN allowlist (empty set = all PRNs in that signal's
     // range). Empty list -> default_signal_selection() (GPS L1 C/A + Galileo E1-B, all PRNs).
@@ -48,7 +48,7 @@ struct Receiver_config
 // effect on the next run() like the signal selection.
 struct Source_params
 {
-    bool             use_rtlsdr     = false;
+    bool             use_rtlsdr = false;
     std::string      file_path;
     Iq_sample_format format         = Iq_sample_format::INT16;
     uint32_t         sample_rate_hz = 2048000; // SOURCE (native) rate
@@ -152,14 +152,14 @@ public:
     std::optional<Tracking_history::Snapshot> published_history( Constellation constellation, int prn, Code code ) const;
 
 private:
-    void setup();               // construct device/buffer/signals/channels/pool/scheduler
-    void teardown();            // tear them down in dependency order
+    void setup();                     // construct device/buffer/signals/channels/pool/scheduler
+    void teardown();                  // tear them down in dependency order
     void enumerate_configured_sats(); // fill configured_sats_ from signal_selection_ (+ PRN filters)
     // From a coarse fix + the decoded almanac, predict each configured SV's visibility + LOS Doppler and
     // push them to aiding_ (so acquisition can skip below-horizon SVs and tightly window the rest).
     void update_acquisition_predictions( const Position_solution& fix );
-    void publish_histories();   // run-loop helper: copy subscribed channels' history to the published map
-    void freeze_histories();    // at EOF: snapshot ALL data-having channels so graphs keep their last state
+    void publish_histories();     // run-loop helper: copy subscribed channels' history to the published map
+    void freeze_histories();      // at EOF: snapshot ALL data-having channels so graphs keep their last state
     void clear_published_state(); // reset the GUI-visible published state (on Stop / fresh Start)
 
     static int history_key( Constellation constellation, int prn, Code code )
@@ -193,7 +193,7 @@ private:
     std::optional<Position_solution> latest_position_;
     std::vector<Channel_snapshot>    latest_snapshots_;
     Receiver_status                  latest_status_;
-    std::map<int, Almanac>       almanac_; // receiver-wide accumulated almanac (sv_key(con,prn) -> coarse orbit)
+    std::map<int, Almanac>           almanac_; // receiver-wide accumulated almanac (sv_key(con,prn) -> coarse orbit)
 
     // History subscriptions + published copies (guarded by state_mutex_; mutable for the const API).
     // Subscriptions are REFERENCE-COUNTED per SV key: several graph windows can watch the same SV, so a

@@ -1,6 +1,6 @@
 #pragma once
-#include <vector>
 #include <QString>
+#include <vector>
 #include "gui_panel.h"
 #include "signal_selection.h"
 

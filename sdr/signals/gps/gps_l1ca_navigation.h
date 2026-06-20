@@ -154,8 +154,8 @@ private:
     bool preamble_found_ = false; // flagtow
     int  sf_decoded_     = 0;     // bitmask: bits 0/1/2 = SF1/SF2/SF3 decoded
 
-    Gps_ephemeris              eph_current_; // most recently decoded subframe (may be invalid)
-    Gps_ephemeris              eph_;         // current ephemeris (valid only if eph_.valid == true and iodc/iode match)
-    Iono                       iono_;        // broadcast Klobuchar iono + leap seconds (SF4 page 18)
+    Gps_ephemeris          eph_current_; // most recently decoded subframe (may be invalid)
+    Gps_ephemeris          eph_;         // current ephemeris (valid only if eph_.valid == true and iodc/iode match)
+    Iono                   iono_;        // broadcast Klobuchar iono + leap seconds (SF4 page 18)
     std::map<int, Almanac> almanac_;     // decoded almanac pages so far (PRN -> coarse orbit)
 };

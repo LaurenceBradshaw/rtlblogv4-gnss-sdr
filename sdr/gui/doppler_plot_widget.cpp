@@ -1,7 +1,7 @@
 #include "doppler_plot_widget.h"
-#include <algorithm>
 #include <QPainter>
 #include <QPolygonF>
+#include <algorithm>
 
 Doppler_plot_widget::Doppler_plot_widget( QWidget* parent )
     : QWidget( parent )
@@ -32,11 +32,11 @@ void Doppler_plot_widget::paintEvent( QPaintEvent* )
     }
 
     // Auto-scale: x to the time span, y to the value range (padded). Guard against a flat line.
-    const double t0 = series_.t_s.front();
-    const double t1 = series_.t_s.back();
+    const double t0     = series_.t_s.front();
+    const double t1     = series_.t_s.back();
     auto [lo_it, hi_it] = std::minmax_element( series_.hz.begin(), series_.hz.end() );
-    double       ymin = *lo_it, ymax = *hi_it;
-    double       pad  = std::max( 1.0, ( ymax - ymin ) * 0.1 );
+    double ymin = *lo_it, ymax = *hi_it;
+    double pad = std::max( 1.0, ( ymax - ymin ) * 0.1 );
     ymin -= pad;
     ymax += pad;
     const double tspan = std::max( 1e-6, t1 - t0 );
@@ -55,10 +55,16 @@ void Doppler_plot_widget::paintEvent( QPaintEvent* )
         const double y  = py( hz );
         p.drawText( QRectF( 0, y - 8, margin_l - 4, 16 ), Qt::AlignRight | Qt::AlignVCenter, QString::number( hz, 'f', 0 ) );
     }
-    p.drawText( QRectF( plot.left(), plot.bottom() + 4, plot.width(), margin_b - 4 ), Qt::AlignLeft,
-                QString::number( t0, 'f', 1 ) + " s" );
-    p.drawText( QRectF( plot.left(), plot.bottom() + 4, plot.width(), margin_b - 4 ), Qt::AlignRight,
-                QString::number( t1, 'f', 1 ) + " s" );
+    p.drawText(
+        QRectF( plot.left(), plot.bottom() + 4, plot.width(), margin_b - 4 ),
+        Qt::AlignLeft,
+        QString::number( t0, 'f', 1 ) + " s"
+    );
+    p.drawText(
+        QRectF( plot.left(), plot.bottom() + 4, plot.width(), margin_b - 4 ),
+        Qt::AlignRight,
+        QString::number( t1, 'f', 1 ) + " s"
+    );
 
     // The trace.
     QPolygonF poly;

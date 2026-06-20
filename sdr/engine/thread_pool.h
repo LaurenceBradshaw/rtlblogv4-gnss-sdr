@@ -53,7 +53,7 @@ private:
     std::vector<std::thread>                       workers_;
     std::multimap<uint64_t, std::function<void()>> high_; // ordered: lowest `order` (furthest behind) first
     std::deque<std::function<void()>>              low_;  // FIFO
-    std::mutex                        mutex_;
-    std::condition_variable           cv_;
-    bool                              stop_ = false;
+    std::mutex                                     mutex_;
+    std::condition_variable                        cv_;
+    bool                                           stop_ = false;
 };

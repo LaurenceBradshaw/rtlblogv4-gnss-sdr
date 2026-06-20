@@ -46,7 +46,8 @@ void Tracking_history::record( double time_s, double doppler_hz, double prompt_i
 
     if( iq_extent_ > 0.0f )
     {
-        const auto bin = [this]( double v ) {
+        const auto bin = [this]( double v )
+        {
             const int b = static_cast<int>( ( v / iq_extent_ + 1.0 ) * 0.5 * IQ_GRID );
             return std::clamp( b, 0, IQ_GRID - 1 );
         };
@@ -111,7 +112,8 @@ Tracking_history::Snapshot Tracking_history::snapshot() const
     s.iq.extent   = iq_extent_;
     s.iq.has_data = iq_has_data_;
 
-    const auto fill = []( const std::deque<std::pair<double, float>>& src, Doppler_series& dst ) {
+    const auto fill = []( const std::deque<std::pair<double, float>>& src, Doppler_series& dst )
+    {
         dst.t_s.reserve( src.size() );
         dst.hz.reserve( src.size() );
         for( const auto& [t, hz] : src )

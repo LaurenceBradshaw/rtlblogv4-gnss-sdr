@@ -3,7 +3,7 @@
 #include <vector>
 #include "constellations.h" // Constellation
 #include "gui_panel.h"
-#include "signal.h"         // Code
+#include "signal.h" // Code
 
 struct Channel_snapshot;
 class Receiver;
@@ -34,7 +34,7 @@ private:
     static int key_of( Constellation constellation, int prn, Code code );
     void       open_detail( Constellation constellation, int prn, Code code ); // row-click handler
 
-    const Receiver&                         receiver_;             // for opening detail/graph windows
+    const Receiver&                         receiver_;              // for opening detail/graph windows
     QLabel*                                 summary_     = nullptr; // "Tracking N of M satellites"
     QVBoxLayout*                            rows_layout_ = nullptr; // holds the rows (+ a trailing stretch)
     Cn0_bar_widget*                         cn0_bars_    = nullptr; // C/N0 bar chart (right half)

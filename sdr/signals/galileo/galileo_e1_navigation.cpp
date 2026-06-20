@@ -385,9 +385,8 @@ void Galileo_e1b_decoder::extract_word( const int* jk )
     // Per-page log, mirroring the GPS per-subframe line: one line for every CRC-valid I/NAV page,
     // showing the word type, the GST tow/week (known once word 5 is in), and the ephemeris-word
     // collection mask (0x1F = complete) so a stalled SV's missing word type is visible.
-    const std::string gst = ( eph_words_ & 0x10 )
-                                ? fmt::format( "tow={:.1f}s  week={:d}", eph_.tow, eph_.week )
-                                : std::string( "tow=?  week=?" );
+    const std::string gst =
+        ( eph_words_ & 0x10 ) ? fmt::format( "tow={:.1f}s  week={:d}", eph_.tow, eph_.week ) : std::string( "tow=?  week=?" );
     logging::log(
         logging::Level::Info,
         fmt::format(
@@ -409,8 +408,8 @@ void Galileo_e1b_decoder::extract_word( const int* jk )
 }
 
 #ifdef ENABLE_UNIT_TESTS
-#include <numeric>
 #include <catch2/catch_test_macros.hpp>
+#include <numeric>
 
 TEST_CASE( "galileo_crc24q_zero_message", "[galileo][nav][crc]" )
 {
@@ -455,7 +454,8 @@ TEST_CASE( "galileo_viterbi_round_trip", "[galileo][nav][fec]" )
 
     std::vector<float> soft;
     int                state = 0;
-    auto               emit  = [&]( int input ) {
+    auto               emit  = [&]( int input )
+    {
         int       next = 0;
         const int o    = Viterbi_tables::enc( input, state, &next );
         state          = next;
@@ -480,9 +480,9 @@ TEST_CASE( "galileo_parity_is_popcount_mod_2", "[galileo][nav][fec]" )
 {
     REQUIRE( parity( 0 ) == 0 );
     REQUIRE( parity( 0b1 ) == 1 );
-    REQUIRE( parity( 0b11 ) == 0 );    // two set bits
-    REQUIRE( parity( 0b1011 ) == 1 );  // three set bits
-    REQUIRE( parity( 0xFF ) == 0 );    // eight set bits
-    REQUIRE( parity( 0xFE ) == 1 );    // seven set bits
+    REQUIRE( parity( 0b11 ) == 0 );   // two set bits
+    REQUIRE( parity( 0b1011 ) == 1 ); // three set bits
+    REQUIRE( parity( 0xFF ) == 0 );   // eight set bits
+    REQUIRE( parity( 0xFE ) == 1 );   // seven set bits
 }
 #endif

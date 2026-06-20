@@ -1,5 +1,4 @@
 #include "main_window.h"
-#include <exception>
 #include <QFont>
 #include <QLabel>
 #include <QPushButton>
@@ -7,6 +6,7 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
+#include <exception>
 #include "gui_frame.h"
 #include "gui_panel.h"
 #include "pvt_widget.h"

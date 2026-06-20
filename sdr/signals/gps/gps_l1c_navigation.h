@@ -36,7 +36,7 @@ public:
     static constexpr int SF1_SYMS   = 52;                    // subframe 1 (9-bit TOI, LFSR/BCH-coded)
     static constexpr int FRAME_SYMS = 1800;                  // one CNAV-2 frame (18 s)
     static constexpr int WINDOW     = FRAME_SYMS + SF1_SYMS; // 1852: a frame + the next frame's SF1
-    static constexpr int N_TOI      = 400; // TOI range 0..399 (frame number within the 2-hour cycle)
+    static constexpr int N_TOI      = 400;                   // TOI range 0..399 (frame number within the 2-hour cycle)
     // Frame-sync match tolerance: max symbol mismatches allowed per 52-symbol subframe-1 block. The
     // true alignment gives 0-2 mismatches (25%-power data, occasional bit error); a random alignment
     // floors at ~10-13, so 5 cleanly separates. Requiring BOTH ends (this frame + next) within tolerance
@@ -59,8 +59,8 @@ private:
     Satellite_id satellite_id_;
     Ephemeris    eph_; // invalid until Phase 3 (LDPC + ephemeris parse)
 
-    std::vector<uint8_t>                             syms_;     // hard data symbols (0/1), newest at back
-    std::array<std::array<uint8_t, SF1_SYMS>, N_TOI> sf1_ {};   // subframe-1 template per TOI
+    std::vector<uint8_t>                             syms_;   // hard data symbols (0/1), newest at back
+    std::array<std::array<uint8_t, SF1_SYMS>, N_TOI> sf1_ {}; // subframe-1 template per TOI
     uint64_t                                         epoch_count_   = 0;
     bool                                             frame_synced_  = false;
     int                                              toi_           = 0; // current frame's TOI
