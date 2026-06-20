@@ -22,6 +22,7 @@ constexpr double AID_REPORT_PERIOD_S = 0.02; // throttle a donor's sibling-Doppl
 constexpr double NUDGE_MIN_TRACK_S   = 0.5;  // don't re-center a freshly handed-off channel still pulling in normally
 constexpr double NUDGE_DWELL_S       = 1.0;  // min gap between re-centers, so the loop gets time to pull in
 constexpr double NUDGE_MIN_DELTA_HZ  = 100.0; // only re-center if the aided Doppler differs enough to be worth it
+constexpr double CLOCK_FF_PERIOD_S   = 0.1;   // throttle the common-clock-drift feedforward (PVT-rate state)
 } // namespace
 
 Channel::Channel(
@@ -384,6 +385,16 @@ void Channel::process_tracking()
         logging::log(
             logging::Level::Info, fmt::format( "Tracking - {} PRN {:2d}  lock lost", signal_.params().name, satellite_id_ )
         );
+    }
+
+    // ---- Coupled-clock feedforward (Fix 3) ----
+    // Feed the receiver-wide common clock drift (PVT) forward into our NCOs so the loops don't chase the
+    // coupled-oscillator drift ramp reactively (helps a weak channel hold lock under thermal drift). No-op
+    // pre-PVT and when unchanged; throttled (the common drift updates only at the PVT rate).
+    if( ns - last_clock_ff_sample_ >= static_cast<Sample_index>( CLOCK_FF_PERIOD_S * sample_rate_hz_ ) )
+    {
+        tracking_->apply_common_clock_drift( aiding_.clock_fraction() );
+        last_clock_ff_sample_ = ns;
     }
 
     // ---- Cross-code / cross-frequency per-SV Doppler aiding ----

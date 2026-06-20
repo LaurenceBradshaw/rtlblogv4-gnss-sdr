@@ -91,6 +91,8 @@ void Tracking_core::initialise( const Acquisition_result& acq )
     carrier_acc_    = 0.0;
     carrier_err_    = 0.0;
     freq_err_       = 0.0;
+    clock_ff_        = 0.0;   // re-seeded from the common PVT drift on the first apply_common_clock_drift
+    clock_ff_seeded_ = false; // (acquisition has already baked the recenter into acq_freq_/carrier_freq_)
     epoch_count_    = 0;
 
     // Reset the lock detector so a re-acquired channel starts measuring afresh.
@@ -135,6 +137,37 @@ void Tracking_core::steer_carrier_doppler( double doppler_hz )
     carrier_acc_  = 0.0;
     carrier_err_  = 0.0;
     freq_err_     = 0.0;
+}
+
+void Tracking_core::apply_common_clock_drift( double eps_fraction )
+{
+    // Fix 3 - coupled-clock feedforward. The RTL-SDR drives the LO and the ADC from ONE oscillator, so a
+    // single fractional drift eps hits both: the carrier loop rode the LO part as a Doppler ramp while the
+    // ADC part walked the code replica off (the wind/thermal-drift field failure). The carrier-aiding already
+    // corrects the STEADY coupled clock (carrier_freq_ carries eps, code_freq_ scales it), so this targets the
+    // RAMP: fold the receiver-wide common eps (from PVT) into the carrier baseline acq_freq_ so a weak loop
+    // tracks only the SV residual, not the drift ramp it cannot follow.
+    //
+    // acq_freq_'s common-mode part is -eps*rf_freq_ (same sign convention as the acquisition Doppler recenter,
+    // which centers on +fraction*carrier in physical Doppler with acq_freq_ = -acq.doppler). FIELD-VALIDATE the
+    // sign: the sim has a clean clock (eps=0) so this is a verified no-op there but its benefit/sign need a
+    // real drifting capture.
+    const double ff = -eps_fraction * rf_freq_;
+    if( !clock_ff_seeded_ )
+    {
+        // Acquisition already recentered on this fraction at hand-off, so acq_freq_ ALREADY contains it - only
+        // record the baseline (no move) so the first push can't double-count.
+        clock_ff_        = ff;
+        clock_ff_seeded_ = true;
+        return;
+    }
+    // Transient-free: shift the baseline by the change and remove the same amount from the loop residual, so
+    // carrier_freq_ (= acq_freq_ + carrier_nco_) is unchanged at this instant - but subsequent epochs now
+    // track only the SV-specific residual instead of the common drift ramp.
+    const double delta = ff - clock_ff_;
+    acq_freq_ += delta;
+    carrier_nco_ -= delta;
+    clock_ff_ = ff;
 }
 
 // compute_nsamp

@@ -111,6 +111,9 @@ public:
     // Re-center the carrier NCO on an external PHYSICAL Doppler (cross-code/-frequency aiding).
     void steer_carrier_doppler( double doppler_hz ) override;
 
+    // Feed the common (PVT) clock-drift fraction forward into the carrier baseline - see Tracker. (Fix 3)
+    void apply_common_clock_drift( double eps_fraction ) override;
+
     // Samples needed for the next epoch.
     // mirrors: samples_consumed = (clen - remcode) / (codefreq / f_sf)
     int compute_samples_needed() const override;
@@ -287,6 +290,13 @@ protected:
     double carrier_acc_    = 0.0; // 3rd-order PLL acceleration integrator (inner state)
     double carrier_err_    = 0.0; // last carrier error (PLL)
     double freq_err_       = 0.0; // last frequency error (FLL)
+
+    // Common clock-drift feedforward (Fix 3): the amount of the receiver-wide PVT clock drift currently folded
+    // into acq_freq_ (carrier Hz), and whether the first PVT push has seeded it (acquisition already baked the
+    // recenter into acq_freq_ at hand-off, so the first push only records the baseline - no move - to avoid
+    // double-counting). Both reset by initialise().
+    double clock_ff_        = 0.0;
+    bool   clock_ff_seeded_ = false;
 
     // Lock detector state (updated every epoch in correlate_epoch; see update_lock_detectors).
     double m2_sum_    = 0.0; // running sum of prompt power (I^2+Q^2) over the current window

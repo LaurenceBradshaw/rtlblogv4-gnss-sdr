@@ -30,6 +30,13 @@ public:
     // carrier loop integrators so it pulls in cleanly from the new center; the carrier-aided code NCO follows.
     virtual void steer_carrier_doppler( double doppler_hz ) = 0;
 
+    // Feed the receiver-wide common clock-drift fraction (df/f, from the PVT solution) forward into the
+    // carrier baseline so the loops track only the SV-specific residual, not the coupled-oscillator drift
+    // ramp (which a weak channel's loop cannot follow - it rode the LO part as a Doppler ramp while the code
+    // replica walked off). No-op until PVT (fraction 0) and transient-free when it changes. (Fix 3 - the
+    // carrier-aiding already handles the STEADY coupled clock; this adds robustness to the drift RAMP.)
+    virtual void apply_common_clock_drift( double eps_fraction ) = 0;
+
     // Samples the next epoch needs (one code period at the current code frequency).
     virtual int compute_samples_needed() const = 0;
 

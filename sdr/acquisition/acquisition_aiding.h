@@ -111,6 +111,15 @@ public:
     // Once set it takes precedence over the satellite-mean bridge.
     void set_clock_fraction( double fraction );
 
+    // The current common-mode clock-drift fraction (df/f) from PVT; 0 until PVT solves. Read by TRACKING
+    // (Fix 3 coupled-clock feedforward) - same quantity + sign the acquisition recenter uses, so the two stay
+    // consistent. Thread-safe.
+    double clock_fraction() const
+    {
+        std::lock_guard<std::mutex> lk( mu_ );
+        return clock_fraction_valid_ ? clock_fraction_ : 0.0;
+    }
+
     // Clear all aiding state back to the un-aided start (for a fresh run / restart).
     void reset()
     {

@@ -215,6 +215,7 @@ private:
     // its measured Doppler (donor) and last re-centered its NCO from a sibling (recipient).
     Sample_index     last_aid_report_sample_ = 0;
     Sample_index     last_nudge_sample_      = 0;
+    Sample_index     last_clock_ff_sample_   = 0; // throttle of the common-clock-drift feedforward (Fix 3)
     Tracking_history history_; // per-epoch graph history (prompt I/Q, ...)
 
     // Acquisition back-off (#1): after a full attempt finds nothing, don't retry
