@@ -24,9 +24,10 @@ struct Tracking_loop_prm
 class Tracking_core : public Tracker
 {
 public:
-    // Max correlator taps the shared correlate() supports: VE/E/P/L/VL. Costas uses 3
-    // (P/E/L); the VEML pilot tracker will use 5. n_taps_ selects how many are active.
-    static constexpr int MAX_TAPS  = 5;
+    // Max correlator taps the shared correlate() supports. Costas uses 3 (P/E/L); the double-estimator
+    // pilot tracker uses 7: P, code-E/L each on the in-phase AND quadrature subcarrier (subcarrier-phase-
+    // independent envelope), plus subcarrier-E/L. n_taps_ selects how many are active.
+    static constexpr int MAX_TAPS  = 8;
     static constexpr int LOOP_L1CA = 10; // loop filter interval (epochs)
 
     // Secondary (overlay) code sync acceptance: differential correlation peak / differential
@@ -241,6 +242,17 @@ protected:
     // per-tap code-phase offset (code elements); n_taps_ is how many are active.
     int                          n_taps_;
     std::array<double, MAX_TAPS> tap_offset_chips_;
+
+    // Double-estimator (Hodgart/Blunt) BOC tracking, enabled by de_mode_ (Pilot_tracker only). The BOC replica
+    // factors as primary[chip] * subcarrier(elem) (apply_boc11: code_[2i]=-p[i], code_[2i+1]=+p[i]), so the
+    // CODE phase and the SUBCARRIER phase are tracked as two independent delays. correlate() places each tap's
+    // code component at tap_offset_chips_[k] and its subcarrier component at subcarrier_offset_ + tap_sc_offset_
+    // [k]. subcarrier_offset_ is the subcarrier-minus-code delay (the SLL state); it may lock onto ANY subcarrier
+    // lobe - the integer-T_s ambiguity is resolved in code_phase_offset_s() by rounding against the (unambiguous)
+    // code phase (Hodgart Eq.4). 0 / unused when de_mode_=false, so L1CA/BeiDou are unchanged.
+    bool                         de_mode_ = false;
+    std::array<double, MAX_TAPS> tap_sc_offset_ {};
+    double                       subcarrier_offset_ = 0.0;
 
     // mirrors sdrtrk_t II/QQ/oldI/oldQ/sumI/sumQ/oldsumI/oldsumQ
     std::array<double, MAX_TAPS> II_, QQ_;

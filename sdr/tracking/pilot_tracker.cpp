@@ -2,35 +2,61 @@
 #include <cmath>
 #include "logging.h"
 
-// VEML 5-tap layout (code-element offsets from the prompt): P[0], E[1]/L[2] at +/- the
-// resolvable Costas spacing (~1 sample), and the wide VE[3]/VL[4] at +/- 0.6 ranging chip.
-// The wide VE/VL span the BOC autocorrelation so the DLL is pulled to the main peak rather
-// than a side peak. (0.6 chip * code_elements_per_chip_ -> code elements; ~2-3 samples here.)
+// DOUBLE-ESTIMATOR (Hodgart/Blunt) 7-tap layout. The BOC replica factors as primary[chip] * subcarrier(elem),
+// so we track the code and subcarrier as two independent delays (de_mode_ in Tracking_core does the factoring).
+// The CODE (envelope) gates are correlated against BOTH the in-phase subcarrier AND a QUADRATURE subcarrier
+// (shifted T_s/2 = 0.5 element = a quarter subcarrier period, expressed here as a +0.5 element subcarrier
+// offset). Combining the two as sqrt(I^2+Q^2) makes the envelope SUBCARRIER-PHASE-INDEPENDENT, so the code DLL
+// tracks the true primary triangle no matter where the subcarrier sits - this is what stops the code loop
+// settling into the false 2-D equilibrium (code at the half-lobe) that biased L1C by ~0.5 element.
+//   P[0]            - code@prompt, subcarrier@prompt: full BOC prompt for carrier/data.
+//   cEi[1]/cEq[2]   - CODE early, subcarrier in-phase / quadrature.
+//   cLi[3]/cLq[4]   - CODE late,  subcarrier in-phase / quadrature.
+//   sE[5]/sL[6]     - SUBCARRIER early/late (code@prompt): the precise SLL; locks to any lobe, the integer
+//                     ambiguity is resolved against the code phase in code_phase_offset_s().
 void Pilot_tracker::configure_taps( double ci )
 {
-    const double s       = corr_spacing_ * ci;            // E/L: ~1 sample (resolvable at 4 MHz)
-    const double vs      = 0.6 * code_elements_per_chip_; // VE/VL: 0.6 ranging chip
-    n_taps_              = 5;
-    tap_offset_chips_[0] = 0.0; // P
-    tap_offset_chips_[1] = -s;  // E
-    tap_offset_chips_[2] = s;   // L
-    tap_offset_chips_[3] = -vs; // VE
-    tap_offset_chips_[4] = vs;  // VL
+    de_mode_          = true;
+    const double s    = corr_spacing_ * ci; // code E/L spacing (on the wide ~1-chip primary triangle)
+    const double q    = 0.5;                 // quadrature subcarrier shift (T_s/2, quarter subcarrier period)
+    // Subcarrier E/L spacing must be well inside the subcarrier correlation half-width (T_s/2 = 0.5 element:
+    // |R_sc| is a triangle with its apex every 1 element and zeros every 0.5 element). 0.3 element keeps both
+    // gates on the apex slope for a clean, high-gain discriminator.
+    const double s_sc = 0.3;
+    n_taps_           = 7;
+    tap_offset_chips_[0] = 0.0; tap_sc_offset_[0] = 0.0;   // P
+    tap_offset_chips_[1] = -s;  tap_sc_offset_[1] = 0.0;   // cE in-phase
+    tap_offset_chips_[2] = -s;  tap_sc_offset_[2] = q;     // cE quadrature
+    tap_offset_chips_[3] = s;   tap_sc_offset_[3] = 0.0;   // cL in-phase
+    tap_offset_chips_[4] = s;   tap_sc_offset_[4] = q;     // cL quadrature
+    tap_offset_chips_[5] = 0.0; tap_sc_offset_[5] = -s_sc; // sE (subcarrier early)
+    tap_offset_chips_[6] = 0.0; tap_sc_offset_[6] = s_sc;  // sL (subcarrier late)
 }
 
-// VEMLP discriminator (GNSS-SDR dll_nc_vemlp_normalized): combine (VE,E) into the early
-// power and (L,VL) into the late power, then normalised early-minus-late.
+// CODE (envelope) discriminator = normalised early-minus-late on the SUBCARRIER-PHASE-INDEPENDENT envelopes:
+// each code gate's power sums in-phase + quadrature subcarrier (and both carrier phases), so sqrt(.) is the
+// primary triangle regardless of subcarrier alignment -> a single peak, no false code lock.
 double Pilot_tracker::code_error() const
 {
     const double early = std::sqrt(
-        sum_I_[3] * sum_I_[3] + sum_Q_[3] * sum_Q_[3] + // VE
-        sum_I_[1] * sum_I_[1] + sum_Q_[1] * sum_Q_[1]
-    ); // E
+        sum_I_[1] * sum_I_[1] + sum_Q_[1] * sum_Q_[1] + sum_I_[2] * sum_I_[2] + sum_Q_[2] * sum_Q_[2]
+    ); // |cE| over in-phase+quadrature subcarrier
     const double late = std::sqrt(
-        sum_I_[2] * sum_I_[2] + sum_Q_[2] * sum_Q_[2] + // L
-        sum_I_[4] * sum_I_[4] + sum_Q_[4] * sum_Q_[4]
-    ); // VL
+        sum_I_[3] * sum_I_[3] + sum_Q_[3] * sum_Q_[3] + sum_I_[4] * sum_I_[4] + sum_Q_[4] * sum_Q_[4]
+    ); // |cL|
     return ( early - late ) / ( early + late + 1e-10 );
+}
+
+// SUBCARRIER discriminator + SLL = normalised early-minus-late on the SUBCARRIER gates (sE/sL). Non-coherent
+// magnitudes are fine: the loop only has to lock onto the NEAREST subcarrier lobe (its integer-T_s ambiguity is
+// resolved against the code phase in code_phase_offset_s()), so subcarrier_offset_ is deliberately NOT
+// clamped/wrapped - constraining it would fight the natural lobe lock and corrupt the precise estimate.
+void Pilot_tracker::subcarrier_update()
+{
+    const double early = std::hypot( sum_I_[5], sum_Q_[5] ); // sE
+    const double late  = std::hypot( sum_I_[6], sum_Q_[6] ); // sL
+    const double d     = ( early - late ) / ( early + late + 1e-10 );
+    subcarrier_offset_ -= SUBC_GAIN * d; // early>late (d>0): replica subcarrier is late -> advance it (earlier)
 }
 
 // run_loops
@@ -83,6 +109,7 @@ void Pilot_tracker::run_loops( bool /*bit_sync*/, bool /*sw_loop*/, Satellite_id
                 const double dt = EXTEND_SYMBOLS * epoch_period_;
                 pll_update( prm2_, dt, /*use_fll=*/true, /*pure_pll=*/true );
                 dll_update( prm2_, dt );
+                subcarrier_update();
                 clear_cumsum();
                 ext_count_ = 0;
             }
@@ -95,6 +122,7 @@ void Pilot_tracker::run_loops( bool /*bit_sync*/, bool /*sw_loop*/, Satellite_id
             ext_count_ = 0;
             pll_update( prm2_, epoch_period_, /*use_fll=*/true, /*pure_pll=*/true );
             dll_update( prm2_, epoch_period_ );
+            subcarrier_update();
             clear_cumsum();
         }
     }

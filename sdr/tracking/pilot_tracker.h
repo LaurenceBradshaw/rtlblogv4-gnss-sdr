@@ -14,6 +14,14 @@ public:
     void run_loops( bool bit_sync, bool sw_loop, Satellite_id prn ) override;
 
 protected:
-    void   configure_taps( double ci ) override; // 5-tap VE/E/P/L/VL (BOC false-lock handling)
-    double code_error() const override;          // VEMLP: (sqrt(|VE|^2+|E|^2)-sqrt(|L|^2+|VL|^2))/sum
+    void   configure_taps( double ci ) override; // DE 5-tap: P, code E/L, subcarrier E/L
+    double code_error() const override;          // envelope code DLL from the code E/L gates (subcarrier-indep.)
+
+private:
+    // Double-estimator SUBCARRIER loop (SLL): drives subcarrier_offset_ (Tracking_core) from the subcarrier
+    // E/L gates so the subcarrier tracks the received signal independently of the code phase. It may lock onto
+    // any subcarrier lobe; the integer ambiguity is resolved in code_phase_offset_s() by rounding against the
+    // code phase (NOT here - so do NOT clamp/wrap subcarrier_offset_). Run only once carrier+secondary synced.
+    void                    subcarrier_update();
+    static constexpr double SUBC_GAIN = 0.2; // 1st-order SLL gain (code elements per unit discriminator)
 };

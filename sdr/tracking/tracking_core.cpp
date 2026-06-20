@@ -1,6 +1,7 @@
 #include "tracking_core.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <complex>
 #include "logging.h"
 
@@ -264,16 +265,48 @@ void Tracking_core::correlate( const Sample_block& block, int n )
         // previous explicit P/E/L code with phase_E = P-s, phase_L = P+s).
         for( int k = 0; k < n_taps_; k++ )
         {
-            double ph = phase_P + tap_offset_chips_[k];
-            if( ph < 0.0 )
+            float c;
+            if( de_mode_ )
             {
-                ph += code_len_;
+                // Double-estimator: independent CODE (primary) and SUBCARRIER offsets. +primary[chip] is the
+                // odd half-chip element code_[2*chip+1] = code_[(int)cph | 1]; the subcarrier is the element
+                // parity (even=-1, odd=+1, per apply_boc11), at the SLL phase subcarrier_offset_ + the tap's
+                // subcarrier offset.
+                double cph = phase_P + tap_offset_chips_[k];
+                if( cph < 0.0 )
+                {
+                    cph += code_len_;
+                }
+                else if( cph >= code_len_ )
+                {
+                    cph -= code_len_;
+                }
+                double sph = phase_P + subcarrier_offset_ + tap_sc_offset_[k];
+                if( sph < 0.0 )
+                {
+                    sph += code_len_;
+                }
+                else if( sph >= code_len_ )
+                {
+                    sph -= code_len_;
+                }
+                const float prim = code_[static_cast<int>( cph ) | 1];
+                const float sc   = ( static_cast<int>( sph ) & 1 ) ? 1.0f : -1.0f;
+                c                = prim * sc;
             }
-            else if( ph >= code_len_ )
+            else
             {
-                ph -= code_len_;
+                double ph = phase_P + tap_offset_chips_[k];
+                if( ph < 0.0 )
+                {
+                    ph += code_len_;
+                }
+                else if( ph >= code_len_ )
+                {
+                    ph -= code_len_;
+                }
+                c = code_[static_cast<int>( ph )];
             }
-            const float c = code_[static_cast<int>( ph )];
             acc_i[k] += wr * c;
             acc_q[k] += wi * c;
         }
@@ -614,7 +647,18 @@ double Tracking_core::code_phase_offset_s() const
     // the sub-sample offset of next_sample from the code-period boundary. /code_rate_ -> seconds. Adding
     // this to the whole-epoch transmission time makes t_tx track the boundary instead of quantising to the
     // nearest whole sample (the +/-0.5-sample sawtooth, std = sample/sqrt(12) ~ 42 m at 2 MHz).
-    return remaining_code_ / code_rate_;
+    if( !de_mode_ )
+    {
+        return remaining_code_ / code_rate_;
+    }
+    // Double-estimator combine (Hodgart Eq.4): the SUBCARRIER delay is the precise estimate but is ambiguous
+    // mod T_s (= 1 code element here: 2 elements/chip, T_s = T_c/2). subcarrier_offset_ is the subcarrier-minus-
+    // code delay and may have locked onto any lobe (subcarrier_offset_ = n*T_s + epsilon). The code phase is
+    // unambiguous, so round the integer-T_s part away and keep only the precise sub-element refinement epsilon
+    // = subcarrier_offset_ - round(subcarrier_offset_) (T_s = 1 element), added to the code phase. Correct as
+    // long as |code error| < T_s/2 (Hodgart Eq.5), which the code DLL holds.
+    const double eps = subcarrier_offset_ - std::round( subcarrier_offset_ );
+    return ( remaining_code_ + eps ) / code_rate_;
 }
 
 // advance_secondary_sync
