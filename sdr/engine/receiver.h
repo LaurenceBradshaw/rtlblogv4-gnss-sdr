@@ -8,7 +8,7 @@
 #include <set>
 #include <string>
 #include <vector>
-#include "acquisition_aiding.h"
+#include "signal_aiding.h"
 #include "channel.h"
 #include "fir_decimator.h"
 #include "iq_file_device.h" // Iq_sample_format
@@ -178,7 +178,7 @@ private:
     std::unique_ptr<Stream_device>        device_;
     std::unique_ptr<Fir_decimator>        decimator_; // optional layer: device -> decimator -> buffer
     std::vector<std::unique_ptr<Signal>>  signals_;
-    Acquisition_aiding                    aiding_;
+    Signal_aiding                    aiding_;
     std::vector<std::unique_ptr<Channel>> channels_;
     std::vector<Channel*>                 channel_ptrs_;
     std::unique_ptr<Thread_pool>          pool_;

@@ -2,7 +2,7 @@
 #include <fftw3.h>
 #include <complex>
 #include <vector>
-#include "acquisition_aiding.h"
+#include "signal_aiding.h"
 #include "signal.h"
 #include "types.h"
 
@@ -24,7 +24,7 @@ public:
     // The Doppler search STEP is not a free parameter: the FFT-shift carrier wipe (see integrate()) can only
     // shift the spectrum by whole FFT bins, so the step is the bin width fs/m_ (computed in the ctor as
     // doppler_step_hz_) and sub-bin Doppler is recovered by parabolic interpolation in check_acquisition().
-    // The search HALF-WIDTH is supplied per-attempt by Acquisition_aiding (wide while bootstrapping, narrow
+    // The search HALF-WIDTH is supplied per-attempt by Signal_aiding (wide while bootstrapping, narrow
     // once the common offset is pinned); the grid is allocated for WIDE.
 
     // prn_code : one code period, Q=0, as returned by Signal::code_samples()
@@ -37,7 +37,7 @@ public:
         Satellite_id              satellite_id,
         double                    sample_rate_hz,
         const Signal_params&      sig,
-        const Acquisition_aiding& aiding
+        const Signal_aiding& aiding
     );
     ~Acquisition_engine();
 
@@ -83,7 +83,7 @@ private:
     std::vector<double> doppler_freqs_; // nfreq_ Doppler hypotheses (Hz, relative to recenter)
     std::vector<double> power_;         // n_ x nfreq_ accumulated correlation power - P in GNSS-SDRLIB
 
-    const Acquisition_aiding& aiding_;                  // shared receiver-wide recenter estimate
+    const Signal_aiding& aiding_;                  // shared receiver-wide recenter estimate
     Satellite_id              satellite_id_;            // this channel's SV - for the per-SV almanac aiding query
     Constellation             constellation_;           // this signal's constellation - ditto
     double                    carrier_freq_hz_;         // this signal's carrier (Hz) - for the aiding query

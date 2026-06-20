@@ -6,8 +6,6 @@
 
 namespace
 {
-constexpr double SPEED_OF_LIGHT = 299792458.0; // meters per second
-
 // Unit line-of-sight vectors (receiver -> each satellite) and their ranges.
 void los_vector( const Eigen::MatrixXd& xusr, const Eigen::MatrixXd& xsat, Eigen::MatrixXd& u, Eigen::VectorXd& rng )
 {

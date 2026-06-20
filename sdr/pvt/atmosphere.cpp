@@ -1,5 +1,6 @@
 #include "atmosphere.h"
 #include <cmath>
+#include "constants.h"
 
 double klobuchar_iono_delay_m(
     const double alpha[4],
@@ -75,7 +76,7 @@ double klobuchar_iono_delay_m(
         T_iono_s = F * 5e-9;
     }
 
-    return T_iono_s * 299792458.0; // metres
+    return T_iono_s * constants::SPEED_OF_LIGHT_M_S; // metres
 }
 
 double tropo_delay_m( double elevation_rad, double user_alt_m )
@@ -97,15 +98,14 @@ double tropo_delay_m( double elevation_rad, double user_alt_m )
 
 namespace
 {
-constexpr double C   = 299792458.0;
-const double     DEG = M_PI / 180.0;
+const double DEG = M_PI / 180.0;
 
 // The Klobuchar night-time floor: with zero amplitude coefficients the cosine series vanishes
 // and the delay collapses to F * 5 ns * c, where F is the obliquity factor.
 double klobuchar_floor_m( double elevation_rad )
 {
     const double F = 1.0 + 16.0 * std::pow( 0.53 - elevation_rad / M_PI, 3 );
-    return F * 5e-9 * C;
+    return F * 5e-9 * constants::SPEED_OF_LIGHT_M_S;
 }
 } // namespace
 

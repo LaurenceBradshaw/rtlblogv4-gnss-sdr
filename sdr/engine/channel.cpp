@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include "constants.h"
 #include "logging.h"
 #include "timing.h"
 
@@ -30,7 +31,7 @@ Channel::Channel(
     Satellite_id        satellite_id,
     uint32_t            sample_rate_hz,
     Sample_buffer&      sample_buffer,
-    Acquisition_aiding& aiding
+    Signal_aiding& aiding
 )
     : signal_( signal ),
       aiding_( aiding ),
@@ -158,7 +159,7 @@ void Channel::publish_snapshot()
     // Live tracking C/N0 (M2M4) once it has a window; fall back to the acquisition C/N0 until then.
     s.cn0_db_hz = ( state_ == Channel_state::TRACKING && tracking_->get_cn0_db_hz() > 0.0 ) ? tracking_->get_cn0_db_hz()
                                                                                             : acq_cn0_db_hz_;
-    s.wavelength_m         = 299792458.0 / signal_.params().carrier_freq_hz;
+    s.wavelength_m         = constants::SPEED_OF_LIGHT_M_S / signal_.params().carrier_freq_hz;
     s.eph                  = navigation_->ephemeris(); // copies the base Ephemeris (all the orbit model needs)
     s.iono                 = *navigation_->iono();     // broadcast iono (iono.valid false unless this SV decoded it)
 

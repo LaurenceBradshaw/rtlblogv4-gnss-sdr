@@ -185,7 +185,7 @@ Signal_id signal_from_tokens( const std::string& constellation, const std::strin
             return { Constellation::Gps, Band::L1, Code::Cd };
         throw std::invalid_argument( "Unknown signal '" + signal + "' for gps (expected l1ca, l1c)" );
     }
-    if( con == Constellation::Galileo && s == "e1b" )
+    if( con == Constellation::Galileo && s == "e1" )
         return def;
     if( con == Constellation::Beidou && s == "b1i" )
         return def;
@@ -216,7 +216,7 @@ const char* signal_name( const Signal_id& id )
     case Code::Cd:
         return "l1c";
     case Code::B:
-        return "e1b";
+        return "e1"; // whole-signal token: the receiver tracks the E1-C pilot + decodes E1-B data as one signal
     case Code::I:
         return "b1i";
     default:
@@ -418,10 +418,10 @@ TEST_CASE( "prn_selected_empty_filter_is_all", "[selection][prn]" )
 
 TEST_CASE( "parse_selection_components_and_per_constellation_prns", "[selection][signals]" )
 {
-    // --signal gps:l1ca --signal galileo:e1b   --prns gps:1,4,6-8 --prns galileo:3,11
+    // --signal gps:l1ca --signal galileo:e1   --prns gps:1,4,6-8 --prns galileo:3,11
     // (the CLI comma-splits the --prns values, so they arrive flattened):
     const auto s = parse_selection(
-        { "gps:l1ca", "galileo:e1b" }, { "gps:1", "4", "6-8", "galileo:3", "11" }
+        { "gps:l1ca", "galileo:e1" }, { "gps:1", "4", "6-8", "galileo:3", "11" }
     );
     REQUIRE( s.size() == 2 );
     REQUIRE( s[0].id == Signal_id { Constellation::Gps, Band::L1, Code::CA } );
@@ -439,7 +439,7 @@ TEST_CASE( "parse_selection_components_and_per_constellation_prns", "[selection]
     REQUIRE( t[0].prns.empty() );
 
     // PRNs are per-CONSTELLATION: one --prns gps:... applies to ALL of gps's selected components.
-    const auto u = parse_selection( { "gps:l1ca", "gps:l1c", "galileo:e1b" }, { "gps:1,2,5-7" } );
+    const auto u = parse_selection( { "gps:l1ca", "gps:l1c", "galileo:e1" }, { "gps:1,2,5-7" } );
     REQUIRE( u.size() == 3 );
     REQUIRE( u[0].prns == std::set<int> { 1, 2, 5, 6, 7 } ); // gps L1 C/A
     REQUIRE( u[1].prns == std::set<int> { 1, 2, 5, 6, 7 } ); // gps L1C (same per-constellation set)
@@ -460,7 +460,7 @@ TEST_CASE( "parse_selection_components_and_per_constellation_prns", "[selection]
 TEST_CASE( "parse_selection_errors", "[selection][signals]" )
 {
     REQUIRE_THROWS_AS( parse_selection( { "glonass" }, {} ), std::invalid_argument );          // unknown constellation
-    REQUIRE_THROWS_AS( parse_selection( { "gps:e1b" }, {} ), std::invalid_argument );          // component not in constellation
+    REQUIRE_THROWS_AS( parse_selection( { "gps:e1" }, {} ), std::invalid_argument );          // component not in constellation
     REQUIRE_THROWS_AS( parse_selection( { "gps" }, { "gps:4-1" } ), std::invalid_argument );   // reversed PRN range
     REQUIRE_THROWS_AS( parse_selection( { "gps" }, { "4" } ), std::invalid_argument );         // PRN before any constellation
     REQUIRE_THROWS_AS( parse_selection( { "gps" }, { "galileo:1,2" } ), std::invalid_argument ); // PRNs for un-searched constellation

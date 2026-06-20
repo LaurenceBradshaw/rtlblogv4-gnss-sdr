@@ -48,7 +48,7 @@ int main( int argc, char** argv )
                          "--decimate 12 runs at ~2.083 MHz",
           cxxopts::value<uint32_t>()->default_value( "1" ) )
         ( "signal",      "Signal to search, repeatable: CONSTELLATION[:COMPONENT], where "
-                         "CONSTELLATION=gps|galileo|beidou and COMPONENT=l1ca|e1b|b1i. Omit the component "
+                         "CONSTELLATION=gps|galileo|beidou and COMPONENT=l1ca|l1c|e1|b1i. Omit the component "
                          "to search ALL of that constellation's components. e.g. --signal gps:l1ca "
                          "--signal galileo  (default: gps galileo)",
           cxxopts::value<std::vector<std::string>>() )

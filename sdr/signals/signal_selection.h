@@ -37,19 +37,19 @@ std::vector<Signal_selection> default_signal_selection();
 std::vector<Signal_id> all_signals();
 
 // Resolve a Signal_id from a constellation token ("gps", "galileo"/"gal", "beidou"/"bds") and an
-// optional signal-component name ("l1ca", "e1b", "b1i"). Case-insensitive. An empty `signal` selects
+// optional signal-component name ("l1ca", "e1", "b1i"). Case-insensitive. An empty `signal` selects
 // the constellation's default (only) signal. Throws std::invalid_argument on an unknown constellation
 // or a signal name that doesn't belong to it.
 Signal_id signal_from_tokens( const std::string& constellation, const std::string& signal = "" );
 
 // Canonical lower-case constellation token ("gps" / "galileo" / "beidou" / "?").
 const char* signal_token( const Signal_id& id );
-// Canonical lower-case signal-component name ("l1ca" / "e1b" / "b1i" / "?").
+// Canonical lower-case signal-component name ("l1ca" / "e1" / "b1i" / "?").
 const char* signal_name( const Signal_id& id );
 
 // Build the signal selection from the CLI's two flags (each a flattened token stream, since the parser
 // may comma-split a value):
-//   signal_tokens : `CONSTELLATION[:COMPONENT]` each, e.g. "gps", "gps:l1ca", "galileo:e1b".
+//   signal_tokens : `CONSTELLATION[:COMPONENT]` each, e.g. "gps", "gps:l1ca", "galileo:e1".
 //   prn_tokens    : per-constellation PRN lists `CONSTELLATION:PRNS`, e.g. "gps:1,4,6-32" (the comma
 //                   split leaves "gps:1","4","6-32" - an alpha-headed token starts a constellation, a
 //                   numeric/range token attaches to it). PRNs apply to ALL of that constellation's

@@ -43,7 +43,7 @@ inline const char* code_label( Code c )
     case Code::Cd:
         return "L1C";
     case Code::B:
-        return "E1B";
+        return "E1";
     case Code::I:
         return "B1I";
     }

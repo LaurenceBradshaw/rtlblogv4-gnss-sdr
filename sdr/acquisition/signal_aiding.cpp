@@ -1,7 +1,7 @@
-#include "acquisition_aiding.h"
+#include "signal_aiding.h"
 #include "logging.h"
 
-void Acquisition_aiding::report( double doppler_hz, double carrier_hz )
+void Signal_aiding::report( double doppler_hz, double carrier_hz )
 {
     std::lock_guard<std::mutex> lk( mu_ );
     sum_fraction_ += doppler_hz / carrier_hz;
@@ -34,7 +34,7 @@ void Acquisition_aiding::report( double doppler_hz, double carrier_hz )
     }
 }
 
-Acquisition_aiding::Estimate Acquisition_aiding::estimate_common_locked( double carrier_hz ) const
+Signal_aiding::Estimate Signal_aiding::estimate_common_locked( double carrier_hz ) const
 {
     if( clock_fraction_valid_ )
     {
@@ -50,13 +50,13 @@ Acquisition_aiding::Estimate Acquisition_aiding::estimate_common_locked( double 
     return { bridge_fraction_locked() * carrier_hz, half_width, n_, false, true };
 }
 
-Acquisition_aiding::Estimate Acquisition_aiding::estimate( double carrier_hz ) const
+Signal_aiding::Estimate Signal_aiding::estimate( double carrier_hz ) const
 {
     std::lock_guard<std::mutex> lk( mu_ );
     return estimate_common_locked( carrier_hz );
 }
 
-Acquisition_aiding::Estimate Acquisition_aiding::estimate( Constellation con, int prn, double carrier_hz ) const
+Signal_aiding::Estimate Signal_aiding::estimate( Constellation con, int prn, double carrier_hz ) const
 {
     std::lock_guard<std::mutex> lk( mu_ );
     const int                   key = sv_key( con, prn );
@@ -84,19 +84,19 @@ Acquisition_aiding::Estimate Acquisition_aiding::estimate( Constellation con, in
     return { center, SEARCH_HBAND_ALMANAC_HZ, n_, clock_fraction_valid_, it->second.above_horizon };
 }
 
-void Acquisition_aiding::set_prediction( Constellation con, int prn, bool above_horizon, double los_doppler_fraction )
+void Signal_aiding::set_prediction( Constellation con, int prn, bool above_horizon, double los_doppler_fraction )
 {
     std::lock_guard<std::mutex> lk( mu_ );
     predictions_[sv_key( con, prn )] = { above_horizon, los_doppler_fraction };
 }
 
-void Acquisition_aiding::report_sv_doppler( Constellation con, int prn, double doppler_hz, double carrier_hz )
+void Signal_aiding::report_sv_doppler( Constellation con, int prn, double doppler_hz, double carrier_hz )
 {
     std::lock_guard<std::mutex> lk( mu_ );
     sv_doppler_fraction_[sv_key( con, prn )] = doppler_hz / carrier_hz; // band-agnostic df/f
 }
 
-bool Acquisition_aiding::sv_doppler_fraction( Constellation con, int prn, double& fraction_out ) const
+bool Signal_aiding::sv_doppler_fraction( Constellation con, int prn, double& fraction_out ) const
 {
     std::lock_guard<std::mutex> lk( mu_ );
     const auto                  it = sv_doppler_fraction_.find( sv_key( con, prn ) );
@@ -108,14 +108,14 @@ bool Acquisition_aiding::sv_doppler_fraction( Constellation con, int prn, double
     return true;
 }
 
-bool Acquisition_aiding::searchable( Constellation con, int prn ) const
+bool Signal_aiding::searchable( Constellation con, int prn ) const
 {
     std::lock_guard<std::mutex> lk( mu_ );
     const auto                  it = predictions_.find( sv_key( con, prn ) );
     return it == predictions_.end() || it->second.above_horizon; // unknown SV stays searchable
 }
 
-void Acquisition_aiding::set_clock_fraction( double fraction )
+void Signal_aiding::set_clock_fraction( double fraction )
 {
     if( !clock_fraction_valid_ )
     {
@@ -134,7 +134,18 @@ void Acquisition_aiding::set_clock_fraction( double fraction )
     clock_fraction_valid_ = true;
 }
 
-double Acquisition_aiding::bridge_fraction_locked() const
+void Signal_aiding::reset()
+{
+    std::lock_guard<std::mutex> lk( mu_ );
+    sum_fraction_         = 0.0;
+    n_                    = 0;
+    clock_fraction_       = 0.0;
+    clock_fraction_valid_ = false;
+    predictions_.clear();
+    sv_doppler_fraction_.clear();
+}
+
+double Signal_aiding::bridge_fraction_locked() const
 {
     if( n_ == 0 )
     {

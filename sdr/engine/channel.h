@@ -5,7 +5,8 @@
 #include <memory>
 #include <mutex>
 #include "acquisition.h"
-#include "acquisition_aiding.h"
+#include "signal_aiding.h"
+#include "constants.h"
 #include "ephemeris.h"
 #include "gps_l1ca_navigation.h"
 #include "sample_buffer.h"
@@ -58,7 +59,7 @@ struct Channel_snapshot
     {
         const double local_s = ( static_cast<int64_t>( rx_sample ) - static_cast<int64_t>( next_sample ) ) / sample_rate_hz;
         const double range_rate_m_s = -wavelength_m * carrier_doppler_hz;
-        return transmission_time_s + local_s * ( 1.0 - range_rate_m_s / 299792458.0 );
+        return transmission_time_s + local_s * ( 1.0 - range_rate_m_s / constants::SPEED_OF_LIGHT_M_S );
     }
 
     // Pseudorange rate = -lambda * Doppler (textbook; the conj-wipe carrier_freq_ is already the
@@ -87,7 +88,7 @@ public:
         Satellite_id        satellite_id,
         uint32_t            sample_rate_hz,
         Sample_buffer&      sample_buffer,
-        Acquisition_aiding& aiding
+        Signal_aiding& aiding
     );
 
     // Not copyable or movable (holds FFTW plans, a Sample_buffer reference, etc.)
@@ -197,7 +198,7 @@ private:
     }
 
     const Signal&                signal_;
-    Acquisition_aiding&          aiding_;
+    Signal_aiding&          aiding_;
     Sample_buffer&               sample_buffer_;
     Satellite_id                 satellite_id_;
     Channel_state                state_;

@@ -5,6 +5,7 @@
 #include <map>
 #include <utility>
 #include "atmosphere.h"
+#include "constants.h"
 #include "geodesy.h"
 #include "logging.h"
 
@@ -12,9 +13,6 @@ void Observation_engine::generate(
     const std::vector<Channel*>& channels, Sample_index rx_sample, double sample_rate_hz, const Ecef* user_ecef
 )
 {
-    const double c                    = 299792458.0; // speed of light in m/s
-    const double EARTH_ROTATION_SPEED = 7.2921151467e-5; // rad/s (matches orbit.cpp's OMEGA_E_DOT - was a
-                                                         // truncated 7.292115e-5, a ~1.5e-7 inconsistency)
     measurements_.clear();
 
     // Take ONE coherent snapshot per channel up front (the owning workers publish these); every read
@@ -102,12 +100,12 @@ void Observation_engine::generate(
                 const double        t_tx    = s.transmit_time_at( rx_sample, sample_rate_hz );
                 const double        transit = t_rx_gps_tow_s - t_tx;
                 const Ecef          sv      = orbit::satellite_ecef_pos( s.eph, t_tx, con );
-                const double        cs = std::cos( EARTH_ROTATION_SPEED * transit ), sn = std::sin( EARTH_ROTATION_SPEED * transit );
+                const double        cs = std::cos( constants::EARTH_ROTATION_RATE_RAD_S * transit ), sn = std::sin( constants::EARTH_ROTATION_RATE_RAD_S * transit );
                 const Ecef          svr { sv.x * cs + sv.y * sn, -sv.x * sn + sv.y * cs, sv.z }; // Sagnac to rx epoch
                 const double        range = std::sqrt( ( svr.x - rx.x ) * ( svr.x - rx.x ) + ( svr.y - rx.y ) * ( svr.y - rx.y )
                                                        + ( svr.z - rx.z ) * ( svr.z - rx.z ) );
                 const double        sv_clk = orbit::satellite_clock_offset( s.eph, t_tx, con );
-                const double        resid  = transit * c + sv_clk * c - range; // c*rx_clock + per-SV error
+                const double        resid  = transit * constants::SPEED_OF_LIGHT_M_S + sv_clk * constants::SPEED_OF_LIGHT_M_S - range; // c*rx_clock + per-SV error
                 logging::log(
                     logging::Level::Info,
                     fmt::format(
@@ -176,7 +174,7 @@ void Observation_engine::generate(
 
         const double t_tx      = s.transmit_time_at( rx_sample, sample_rate_hz );
         m.transmit_time_s      = t_tx;
-        m.pseudorange_m        = ( t_rx_gps_tow_s - t_tx ) * c;
+        m.pseudorange_m        = ( t_rx_gps_tow_s - t_tx ) * constants::SPEED_OF_LIGHT_M_S;
         m.pseudorange_rate_m_s = s.range_rate_at( rx_sample, sample_rate_hz );
 
         // Satellite ECEF state + clock from the broadcast ephemeris, dispatched per constellation
@@ -197,11 +195,11 @@ void Observation_engine::generate(
         // SV clock correction. IS-GPS-200: GPS_time = SV_time - dt_sv, so the true GPS transmit time
         // is t_tx - dt_sv, giving pr_corrected = pr_raw + dt_sv*c (and likewise the rate). (Sign was
         // inverted before, which spread the per-SV residuals by ~2*dt_sv*c and threw the fix ~1000 km off.)
-        m.pseudorange_m += m.satellite_clock_offset_s * c;
-        m.pseudorange_rate_m_s += m.satellite_clock_drift_s_s * c;
+        m.pseudorange_m += m.satellite_clock_offset_s * constants::SPEED_OF_LIGHT_M_S;
+        m.pseudorange_rate_m_s += m.satellite_clock_drift_s_s * constants::SPEED_OF_LIGHT_M_S;
 
         double transit_time_s = t_rx_gps_tow_s - t_tx;
-        double earth_spin_rad = EARTH_ROTATION_SPEED * transit_time_s;
+        double earth_spin_rad = constants::EARTH_ROTATION_RATE_RAD_S * transit_time_s;
 
         double cos_spin = std::cos( earth_spin_rad );
         double sin_spin = std::sin( earth_spin_rad );

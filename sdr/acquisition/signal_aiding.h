@@ -3,11 +3,13 @@
 #include <mutex>
 #include "constellations.h"
 
-// Receiver-wide acquisition aiding: a shared estimate of the common-mode carrier-frequency
-// offset - the receiver clock / local-oscillator error, identical for every satellite on a
-// given band - used to RECENTER each channel's Doppler search so the window tracks the true
-// (clock-shifted) satellite cluster instead of sitting on nominal 0 Hz. One instance is shared
-// by every Channel (the offset is a property of the front-end, not of any one satellite).
+// Receiver-wide SIGNAL aiding (Doppler / visibility): a single shared service consumed by BOTH
+// acquisition (common-mode Doppler recenter + search half-width; almanac horizon-skip + per-SV search
+// window) AND tracking (cross-code carrier-NCO steer; the common clock-drift feedforward). Its core is an
+// estimate of the common-mode carrier-frequency offset - the receiver clock / local-oscillator error,
+// identical for every satellite on a given band - used to RECENTER each channel's Doppler search so the
+// window tracks the true (clock-shifted) satellite cluster instead of sitting on nominal 0 Hz. One instance
+// is shared by every Channel (the offset is a property of the front-end, not of any one satellite).
 //
 // Why it helps: f_obs(SV) = f_clock (common) + f_doppler(SV) (per-SV, +/-~5 kHz). A cheap SDR
 // front-end can have f_clock of several kHz (this capture ~ -7.5 kHz), which alone pushes the
@@ -44,7 +46,7 @@
 //     with carrier, so that still transfers). An inter-front-end clock offset would have to be estimated
 //     and removed - analogous to the PVT inter-system bias.
 // The cross-code/-frequency per-SV measured Doppler below (report_sv_doppler) inherits exactly this caveat.
-class Acquisition_aiding
+class Signal_aiding
 {
 public:
     // Doppler search half-widths (Hz). Even after recentering on the common-mode clock offset,
@@ -120,17 +122,8 @@ public:
         return clock_fraction_valid_ ? clock_fraction_ : 0.0;
     }
 
-    // Clear all aiding state back to the un-aided start (for a fresh run / restart).
-    void reset()
-    {
-        std::lock_guard<std::mutex> lk( mu_ );
-        sum_fraction_         = 0.0;
-        n_                    = 0;
-        clock_fraction_       = 0.0;
-        clock_fraction_valid_ = false;
-        predictions_.clear();
-        sv_doppler_fraction_.clear();
-    }
+    // Clear all aiding state back to the un-aided start (for a fresh run / restart). Thread-safe.
+    void reset();
 
 private:
     // The recenter fraction the bridge recommends right now (caller MUST hold mu_). The single

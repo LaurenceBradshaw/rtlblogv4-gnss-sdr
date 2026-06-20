@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <thread>
+#include "constants.h"
 #include "geodesy.h"
 #include "logging.h"
 #include "orbit.h"
@@ -70,7 +71,6 @@ void Receiver::update_acquisition_predictions( const Position_solution& fix )
     // Any constellation that has an almanac (GPS today; Galileo/BeiDou once their almanac decode lands).
     // The receiver-wide almanac_ was just refreshed on this same (run) thread, so reading it here without
     // the lock is safe (the lock only guards GUI readers).
-    constexpr double C       = 299792458.0;
     constexpr double EL_MASK = -2.0 * 3.14159265358979 / 180.0; // skip only SVs clearly below the horizon
     const Ecef       user { fix.ecef_x_m, fix.ecef_y_m, fix.ecef_z_m };
     const double     t = obs_engine_.reception_time_s(); // current GPS time of week (~GST for Galileo - the
@@ -93,7 +93,7 @@ void Receiver::update_acquisition_predictions( const Position_solution& fix )
         const double dx = sp.x - user.x, dy = sp.y - user.y, dz = sp.z - user.z;
         const double r  = std::sqrt( dx * dx + dy * dy + dz * dz );
         const double rr = ( r > 0.0 ) ? ( sv.x * dx + sv.y * dy + sv.z * dz ) / r : 0.0;
-        aiding_.set_prediction( sat.constellation, sat.prn, el > EL_MASK, -rr / C );
+        aiding_.set_prediction( sat.constellation, sat.prn, el > EL_MASK, -rr / constants::SPEED_OF_LIGHT_M_S );
     }
 }
 
@@ -383,7 +383,7 @@ void Receiver::run()
         // (slowly varying) LO drift; takes precedence over the pre-PVT satellite-mean bridge.
         if( current_position && current_position->valid )
         {
-            aiding_.set_clock_fraction( current_position->clock_drift_m_s / 299792458.0 );
+            aiding_.set_clock_fraction( current_position->clock_drift_m_s / constants::SPEED_OF_LIGHT_M_S );
             update_acquisition_predictions( *current_position );
         }
 

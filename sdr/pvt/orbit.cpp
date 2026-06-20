@@ -1,12 +1,11 @@
 #include "orbit.h"
 #include <cmath>
+#include "constants.h"
 
 namespace orbit
 {
 
-static constexpr double OMEGA_E_DOT      = 7.2921151467e-5; // Earth's rotation rate (rad/s) - GPS & Galileo
-static constexpr double C                = 299792458.0;     // Speed of light (m/s)
-static constexpr double SECONDS_PER_WEEK = 604800.0;        // seconds in a (GPS/Galileo/BeiDou) week
+static constexpr double SECONDS_PER_WEEK = 604800.0; // seconds in a (GPS/Galileo/BeiDou) week
 
 // Gravitational parameter mu (m^3/s^2) per constellation's reference frame.
 static double constellation_mu( Constellation c )
@@ -67,7 +66,7 @@ Ecef satellite_ecef_pos( const Ephemeris& eph, double t_system, Constellation c 
     double x_prime = r * std::cos( u );
     double y_prime = r * std::sin( u );
 
-    double omega = eph.omega0 + ( eph.omegadot - OMEGA_E_DOT ) * tk - OMEGA_E_DOT * eph.toe;
+    double omega = eph.omega0 + ( eph.omegadot - constants::EARTH_ROTATION_RATE_RAD_S ) * tk - constants::EARTH_ROTATION_RATE_RAD_S * eph.toe;
 
     return {
         x_prime * std::cos( omega ) - y_prime * std::cos( i ) * std::sin( omega ),
@@ -104,7 +103,7 @@ Ecef satellite_ecef_vel( const Ephemeris& eph, double t_system, Constellation c 
 
     double x_prime = r * std::cos( u );
     double y_prime = r * std::sin( u );
-    double omega   = eph.omega0 + ( eph.omegadot - OMEGA_E_DOT ) * tk - OMEGA_E_DOT * eph.toe;
+    double omega   = eph.omega0 + ( eph.omegadot - constants::EARTH_ROTATION_RATE_RAD_S ) * tk - constants::EARTH_ROTATION_RATE_RAD_S * eph.toe;
 
     double x_pos = x_prime * std::cos( omega ) - y_prime * std::cos( i ) * std::sin( omega );
     double y_pos = x_prime * std::sin( omega ) + y_prime * std::cos( i ) * std::cos( omega );
@@ -124,7 +123,7 @@ Ecef satellite_ecef_vel( const Ephemeris& eph, double t_system, Constellation c 
     double x_prime_dot = r_dot * std::cos( u ) - r * u_dot * std::sin( u );
     double y_prime_dot = r_dot * std::sin( u ) + r * u_dot * std::cos( u );
 
-    double omega_dot = eph.omegadot - OMEGA_E_DOT;
+    double omega_dot = eph.omegadot - constants::EARTH_ROTATION_RATE_RAD_S;
 
     double dx = x_prime_dot * std::cos( omega ) - y_prime_dot * std::cos( i ) * std::sin( omega ) +
                 y_prime * std::sin( i ) * i_dot * std::sin( omega ) - omega_dot * y_pos;
@@ -138,7 +137,7 @@ Ecef satellite_ecef_vel( const Ephemeris& eph, double t_system, Constellation c 
 double satellite_clock_offset( const Ephemeris& eph, double t_sv, Constellation c )
 {
     const double MU = constellation_mu( c );
-    const double F  = -2.0 * std::sqrt( MU ) / ( C * C ); // relativistic term (s/m^0.5)
+    const double F  = -2.0 * std::sqrt( MU ) / ( constants::SPEED_OF_LIGHT_M_S * constants::SPEED_OF_LIGHT_M_S ); // relativistic term (s/m^0.5)
 
     double delta_t    = wrap_week( t_sv - eph.toc );
     double delta_t_sv = eph.af0 + eph.af1 * delta_t + eph.af2 * delta_t * delta_t - eph.group_delay;
@@ -166,7 +165,7 @@ double satellite_clock_offset( const Ephemeris& eph, double t_sv, Constellation 
 double satellite_clock_drift( const Ephemeris& eph, double t_sv, Constellation c )
 {
     const double MU = constellation_mu( c );
-    const double F  = -2.0 * std::sqrt( MU ) / ( C * C );
+    const double F  = -2.0 * std::sqrt( MU ) / ( constants::SPEED_OF_LIGHT_M_S * constants::SPEED_OF_LIGHT_M_S );
 
     double delta_t    = wrap_week( t_sv - eph.toc );
     double delta_t_sv = eph.af0 + eph.af1 * delta_t + eph.af2 * delta_t * delta_t - eph.group_delay;
