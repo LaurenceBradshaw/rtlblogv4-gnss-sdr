@@ -14,23 +14,40 @@
 //   cLi[3]/cLq[4]   - CODE late,  subcarrier in-phase / quadrature.
 //   sE[5]/sL[6]     - SUBCARRIER early/late (code@prompt): the precise SLL; locks to any lobe, the integer
 //                     ambiguity is resolved against the code phase in code_phase_offset_s().
+// Double-estimator correlator: the BOC replica is factored into primary[chip] x subcarrier(elem) with the
+// code and subcarrier at independent delays (subcarrier_offset_ is the subcarrier-minus-code delay).
+void Pilot_tracker::correlate( const Sample_block& block, int n )
+{
+    correlate_impl(
+        block,
+        n,
+        Boc_de_replica { code_.data(), code_len_, tap_offset_chips_.data(), tap_sc_offset_.data(), subcarrier_offset_ }
+    );
+}
+
 void Pilot_tracker::configure_taps( double ci )
 {
-    de_mode_          = true;
-    const double s    = corr_spacing_ * ci; // code E/L spacing (on the wide ~1-chip primary triangle)
-    const double q    = 0.5;                 // quadrature subcarrier shift (T_s/2, quarter subcarrier period)
+    const double s = corr_spacing_ * ci; // code E/L spacing (on the wide ~1-chip primary triangle)
+    const double q = 0.5;                // quadrature subcarrier shift (T_s/2, quarter subcarrier period)
     // Subcarrier E/L spacing must be well inside the subcarrier correlation half-width (T_s/2 = 0.5 element:
     // |R_sc| is a triangle with its apex every 1 element and zeros every 0.5 element). 0.3 element keeps both
     // gates on the apex slope for a clean, high-gain discriminator.
-    const double s_sc = 0.3;
-    n_taps_           = 7;
-    tap_offset_chips_[0] = 0.0; tap_sc_offset_[0] = 0.0;   // P
-    tap_offset_chips_[1] = -s;  tap_sc_offset_[1] = 0.0;   // cE in-phase
-    tap_offset_chips_[2] = -s;  tap_sc_offset_[2] = q;     // cE quadrature
-    tap_offset_chips_[3] = s;   tap_sc_offset_[3] = 0.0;   // cL in-phase
-    tap_offset_chips_[4] = s;   tap_sc_offset_[4] = q;     // cL quadrature
-    tap_offset_chips_[5] = 0.0; tap_sc_offset_[5] = -s_sc; // sE (subcarrier early)
-    tap_offset_chips_[6] = 0.0; tap_sc_offset_[6] = s_sc;  // sL (subcarrier late)
+    const double s_sc    = 0.3;
+    n_taps_              = 7;
+    tap_offset_chips_[0] = 0.0;
+    tap_sc_offset_[0]    = 0.0; // P
+    tap_offset_chips_[1] = -s;
+    tap_sc_offset_[1]    = 0.0; // cE in-phase
+    tap_offset_chips_[2] = -s;
+    tap_sc_offset_[2]    = q; // cE quadrature
+    tap_offset_chips_[3] = s;
+    tap_sc_offset_[3]    = 0.0; // cL in-phase
+    tap_offset_chips_[4] = s;
+    tap_sc_offset_[4]    = q; // cL quadrature
+    tap_offset_chips_[5] = 0.0;
+    tap_sc_offset_[5]    = -s_sc; // sE (subcarrier early)
+    tap_offset_chips_[6] = 0.0;
+    tap_sc_offset_[6]    = s_sc; // sL (subcarrier late)
 }
 
 // CODE (envelope) discriminator = normalised early-minus-late on the SUBCARRIER-PHASE-INDEPENDENT envelopes:
@@ -41,9 +58,8 @@ double Pilot_tracker::code_error() const
     const double early = std::sqrt(
         sum_I_[1] * sum_I_[1] + sum_Q_[1] * sum_Q_[1] + sum_I_[2] * sum_I_[2] + sum_Q_[2] * sum_Q_[2]
     ); // |cE| over in-phase+quadrature subcarrier
-    const double late = std::sqrt(
-        sum_I_[3] * sum_I_[3] + sum_Q_[3] * sum_Q_[3] + sum_I_[4] * sum_I_[4] + sum_Q_[4] * sum_Q_[4]
-    ); // |cL|
+    const double late =
+        std::sqrt( sum_I_[3] * sum_I_[3] + sum_Q_[3] * sum_Q_[3] + sum_I_[4] * sum_I_[4] + sum_Q_[4] * sum_Q_[4] ); // |cL|
     return ( early - late ) / ( early + late + 1e-10 );
 }
 
@@ -57,6 +73,18 @@ void Pilot_tracker::subcarrier_update()
     const double late  = std::hypot( sum_I_[6], sum_Q_[6] ); // sL
     const double d     = ( early - late ) / ( early + late + 1e-10 );
     subcarrier_offset_ -= SUBC_GAIN * d; // early>late (d>0): replica subcarrier is late -> advance it (earlier)
+}
+
+// Double-estimator combine (Hodgart Eq.4). The SUBCARRIER delay is the precise estimate but is ambiguous mod
+// T_s (= 1 code element here: 2 elements/chip, T_s = T_c/2). subcarrier_offset_ is the subcarrier-minus-code
+// delay and may have locked onto any lobe (= n*T_s + epsilon). The code phase is unambiguous, so round the
+// integer-T_s part away and keep only the precise sub-element refinement eps = subcarrier_offset_ -
+// round(subcarrier_offset_) (T_s = 1 element), added to the code phase. Correct as long as |code error| <
+// T_s/2 (Hodgart Eq.5), which the code DLL holds.
+double Pilot_tracker::code_phase_offset_s() const
+{
+    const double eps = subcarrier_offset_ - std::round( subcarrier_offset_ );
+    return ( remaining_code_ + eps ) / code_rate_;
 }
 
 // run_loops
@@ -76,13 +104,13 @@ void Pilot_tracker::run_loops( bool /*bit_sync*/, bool /*sw_loop*/, Satellite_id
     // hasn't cleaned up after the grace window, drop the sync and re-search - this both kills the stuck
     // "energy on Q" state and gives the SV more chances to sync on the right phase.
     // Slow check: a dirty pre-sync lock that still hasn't cleaned up past the grace window was a false sync.
-    const bool slow_false = epoch_count_ - epoch_at_sync_ > SECONDARY_SYNC_VERIFY_EPOCHS
-                            && carrier_lock_test_ < SECONDARY_SYNC_MIN_LOCK;
+    const bool slow_false =
+        epoch_count_ - epoch_at_sync_ > SECONDARY_SYNC_VERIFY_EPOCHS && carrier_lock_test_ < SECONDARY_SYNC_MIN_LOCK;
     // Fast check: the lock was clean BEFORE this sync but the sync COLLAPSED it - a false sync on a long/weak
     // overlay (GPS L1C's 1800-chip overlay). Catch it quickly so the clean Costas lock isn't degraded for long.
-    const bool fast_broke = cos2phi_at_sync_ > SECONDARY_SYNC_WAS_CLEAN
-                            && epoch_count_ - epoch_at_sync_ > SECONDARY_SYNC_FAST_EPOCHS
-                            && carrier_lock_test_ < cos2phi_at_sync_ - SECONDARY_SYNC_DEGRADE;
+    const bool fast_broke = cos2phi_at_sync_ > SECONDARY_SYNC_WAS_CLEAN &&
+                            epoch_count_ - epoch_at_sync_ > SECONDARY_SYNC_FAST_EPOCHS &&
+                            carrier_lock_test_ < cos2phi_at_sync_ - SECONDARY_SYNC_DEGRADE;
     if( secondary_sync_ && ( slow_false || fast_broke ) )
     {
         secondary_sync_ = false;
@@ -131,9 +159,9 @@ void Pilot_tracker::run_loops( bool /*bit_sync*/, bool /*sw_loop*/, Satellite_id
         advance_secondary_sync(); // uses this epoch's raw prompt (before cumsum below)
         if( secondary_sync_ )
         {
-            epoch_at_sync_     = epoch_count_;        // record when (re-)sync happened, for the verify above
-            cos2phi_at_sync_   = carrier_lock_test_;  // baseline lock for the degradation check above
-            ext_count_         = 0;
+            epoch_at_sync_   = epoch_count_;       // record when (re-)sync happened, for the verify above
+            cos2phi_at_sync_ = carrier_lock_test_; // baseline lock for the degradation check above
+            ext_count_       = 0;
         }
         // Grab frequency with the strong FLL (prm1) for ~0.8 s, then HOLD with the tighter
         // prm2 (Costas+FLL) so the prompt signs are clean enough for the secondary to sync.

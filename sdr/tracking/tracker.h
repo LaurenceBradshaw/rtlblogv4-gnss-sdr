@@ -39,7 +39,7 @@ public:
     // Run the loop filters for this epoch (bit_sync / sw_loop come from the nav decoder).
     virtual void run_loops( bool bit_sync, bool sw_loop, Satellite_id prn ) = 0;
 
-    virtual bool   has_lock() const     = 0;
+    virtual bool   has_lock() const      = 0;
     virtual double get_cn0_db_hz() const = 0; // live tracking C/N0 (M2M4); 0 until the first window
 
     virtual double get_fractional_chip_time() const = 0;

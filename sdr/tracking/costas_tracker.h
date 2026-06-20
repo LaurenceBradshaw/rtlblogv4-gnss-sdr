@@ -12,6 +12,7 @@ public:
     void run_loops( bool bit_sync, bool sw_loop, Satellite_id prn ) override;
 
 protected:
-    void   configure_taps( double ci ) override; // 3-tap P/E/L at +/- corr_spacing_ samples
-    double code_error() const override;          // normalised (|E|-|L|)/(|E|+|L|)
+    void   correlate( const Sample_block& block, int n ) override; // BPSK replica (reads the code array)
+    void   configure_taps( double ci ) override;                   // 3-tap P/E/L at +/- corr_spacing_ samples
+    double code_error() const override;                            // normalised (|E|-|L|)/(|E|+|L|)
 };

@@ -12,6 +12,12 @@ double normalised_early_late( double pE, double pL )
 }
 } // namespace
 
+// BPSK correlator: the replica reads the code array directly at each tap's wrapped phase.
+void Costas_tracker::correlate( const Sample_block& block, int n )
+{
+    correlate_impl( block, n, Bpsk_replica { code_.data(), code_len_, tap_offset_chips_.data() } );
+}
+
 // 3-tap correlator: Prompt[0], Early[1] at -s, Late[2] at +s (s = corr_spacing_ samples).
 void Costas_tracker::configure_taps( double ci )
 {

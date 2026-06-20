@@ -1,7 +1,6 @@
 #include "tracking_core.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <complex>
 #include "logging.h"
 
@@ -23,6 +22,8 @@ Tracking_core::Tracking_core(
     const std::vector<float>& secondary,
     const std::vector<float>& data_code
 )
+    // Only signal-physics members (derived from the args) are set here; all the runtime NCO / correlator /
+    // lock / secondary state is default-initialised in the header and (re)set by initialise().
     : code_( code_chips ),
       code_len_( static_cast<int>( code_chips.size() ) ),
       code_rate_( static_cast<double>( code_chips.size() ) / sig.code_period_s ),
@@ -31,28 +32,10 @@ Tracking_core::Tracking_core(
       rf_freq_( sig.carrier_freq_hz ),
       sample_rate_( sample_rate_hz ),
       ti_( 1.0 / sample_rate_hz ),
-      acq_freq_( 0.0 ),
-      code_freq_( static_cast<double>( code_chips.size() ) / sig.code_period_s ),
-      carrier_freq_( 0.0 ),
-      remaining_code_( 0.0 ),
-      remaining_carr_( 0.0 ),
-      code_nco_( 0.0 ),
-      code_err_( 0.0 ),
-      carrier_nco_( 0.0 ),
-      carrier_acc_( 0.0 ),
-      carrier_err_( 0.0 ),
-      freq_err_( 0.0 ),
+      code_freq_( code_rate_ ), // starts at nominal; the DLL retunes it each epoch
       data_code_( data_code ),
       has_data_( !data_code.empty() ),
-      data_prompt_i_( 0.0 ),
-      data_prompt_q_( 0.0 ),
-      old_data_prompt_i_( 0.0 ),
-      old_data_prompt_q_( 0.0 ),
-      epoch_count_( 0 ),
-      secondary_( secondary ),
-      secondary_sync_( false ),
-      secondary_index_( 0 ),
-      secondary_polarity_( 1 )
+      secondary_( secondary )
 {
     // Loop bandwidths come from the Signal (Signal_params::loop_bw_wide/narrow): per-signal because
     // the right values depend on the integration period and C/N0. wide = pull-in (prm1, pre frame
@@ -65,20 +48,8 @@ Tracking_core::Tracking_core(
     corr_spacing_ = std::max( 1, static_cast<int>( std::round( sample_rate_hz / ( 2.0 * code_rate_ ) ) ) );
 
     // Code elements per ranging chip: 1 for BPSK, 2 for BOC half-chips. Lets the pilot place
-    // VEML taps at chip-fraction offsets (e.g. 0.6 chip) regardless of the half-chip coding.
+    // taps at chip-fraction offsets regardless of the half-chip coding.
     code_elements_per_chip_ = code_rate_ / sig.chip_rate_hz;
-
-    n_taps_ = 3; // default (Costas P/E/L); configure_taps() sets it each epoch
-    tap_offset_chips_.fill( 0.0 );
-
-    II_.fill( 0.0 );
-    QQ_.fill( 0.0 );
-    old_I_.fill( 0.0 );
-    old_Q_.fill( 0.0 );
-    sum_I_.fill( 0.0 );
-    sum_Q_.fill( 0.0 );
-    oldsum_I_.fill( 0.0 );
-    oldsum_Q_.fill( 0.0 );
 }
 
 // make_prm
@@ -177,9 +148,11 @@ int Tracking_core::compute_samples_needed() const
     return std::max( 1, n );
 }
 
-// correlate
-// Time-domain Early/Prompt/Late correlator.
-// mirrors GNSS-SDRLIB correlator() in sdrcmn.c:
+// correlate_impl
+// The shared time-domain N-tap correlator hot loop. Replica is the compile-time per-tap reference-sample
+// policy (Bpsk_replica / Boc_de_replica) supplied by the calling subclass's correlate() override - the only
+// part that differs between strategies; everything else (carrier wipe, code NCO, data prompt, accumulation) is
+// common. mirrors GNSS-SDRLIB correlator() in sdrcmn.c:
 //   *remp = mixcarr(data, dtype, ti, n, freq, phi0, dataI, dataQ)
 //   *remc = rescode(codein, coden, coff, smax, ti*crate, n, code_e)
 //   dot_23(dataI, dataQ, code, code-s[0], code+s[0], n, II, QQ)
@@ -187,8 +160,8 @@ int Tracking_core::compute_samples_needed() const
 // Carrier: wipe by conj(e^(+j * 2pi * carrfreq * ti * i + j * remcarr)) = e^(-j...) (standard
 // wipeoff). carrier_freq_ is set to -acq.doppler_hz at hand-off (initialise) so this conjugated
 // wipe still cancels the signal carrier - acquisition itself is unchanged.
-// Code array indexing: Prompt=index 0, Early=index 1 (code-s), Late=index 2 (code+s)
-void Tracking_core::correlate( const Sample_block& block, int n )
+template <class Replica>
+void Tracking_core::correlate_impl( const Sample_block& block, int n, Replica replica )
 {
     // Save previous epoch correlations before overwriting
     // mirrors: memcpy(trk->oldI, trk->II, ...); trk->oldremcode = trk->remcode; ...
@@ -199,8 +172,8 @@ void Tracking_core::correlate( const Sample_block& block, int n )
 
     const double ci = code_freq_ / sample_rate_; // code elements per sample
 
-    // Strategy sets n_taps_ + the per-tap code-element offsets (Costas: 3-tap E/P/L; Pilot:
-    // 5-tap VE/E/P/L/VL). Prompt is always tap 0.
+    // Strategy sets n_taps_ + the per-tap code-element offsets each epoch (Costas 3-tap E/P/L; Pilot 7-tap
+    // double-estimator). Prompt is always tap 0.
     configure_taps( ci );
 
     // Carrier phasor - mirrors mixcarr() with DTYPEIQ. Done in plain float (not
@@ -260,53 +233,11 @@ void Tracking_core::correlate( const Sample_block& block, int n )
             phase_P += code_len_;
         }
 
-        // Each tap = prompt phase + its offset; the offsets are small (< 1 period) so a
-        // single conditional wrap suffices (for the 3-tap case this is bit-identical to the
-        // previous explicit P/E/L code with phase_E = P-s, phase_L = P+s).
+        // Each tap's reference sample comes from the Replica policy at the prompt phase (it adds the tap's
+        // small code/subcarrier offset and wraps - see Bpsk_replica / Boc_de_replica). Prompt is tap 0.
         for( int k = 0; k < n_taps_; k++ )
         {
-            float c;
-            if( de_mode_ )
-            {
-                // Double-estimator: independent CODE (primary) and SUBCARRIER offsets. +primary[chip] is the
-                // odd half-chip element code_[2*chip+1] = code_[(int)cph | 1]; the subcarrier is the element
-                // parity (even=-1, odd=+1, per apply_boc11), at the SLL phase subcarrier_offset_ + the tap's
-                // subcarrier offset.
-                double cph = phase_P + tap_offset_chips_[k];
-                if( cph < 0.0 )
-                {
-                    cph += code_len_;
-                }
-                else if( cph >= code_len_ )
-                {
-                    cph -= code_len_;
-                }
-                double sph = phase_P + subcarrier_offset_ + tap_sc_offset_[k];
-                if( sph < 0.0 )
-                {
-                    sph += code_len_;
-                }
-                else if( sph >= code_len_ )
-                {
-                    sph -= code_len_;
-                }
-                const float prim = code_[static_cast<int>( cph ) | 1];
-                const float sc   = ( static_cast<int>( sph ) & 1 ) ? 1.0f : -1.0f;
-                c                = prim * sc;
-            }
-            else
-            {
-                double ph = phase_P + tap_offset_chips_[k];
-                if( ph < 0.0 )
-                {
-                    ph += code_len_;
-                }
-                else if( ph >= code_len_ )
-                {
-                    ph -= code_len_;
-                }
-                c = code_[static_cast<int>( ph )];
-            }
+            const float c = replica( k, phase_P );
             acc_i[k] += wr * c;
             acc_q[k] += wi * c;
         }
@@ -348,6 +279,13 @@ void Tracking_core::correlate( const Sample_block& block, int n )
         remaining_carr_ += 2.0 * M_PI;
     }
 }
+
+// Explicit instantiations for the two replica policies (the only callers are the subclass correlate()
+// overrides). Keeps the hot-loop body in this TU while each policy's operator() inlines into it.
+template void
+Tracking_core::correlate_impl<Tracking_core::Bpsk_replica>( const Sample_block&, int, Tracking_core::Bpsk_replica );
+template void
+Tracking_core::correlate_impl<Tracking_core::Boc_de_replica>( const Sample_block&, int, Tracking_core::Boc_de_replica );
 
 // cumsum_corr
 // mirrors GNSS-SDRLIB cumsumcorr():
@@ -647,18 +585,8 @@ double Tracking_core::code_phase_offset_s() const
     // the sub-sample offset of next_sample from the code-period boundary. /code_rate_ -> seconds. Adding
     // this to the whole-epoch transmission time makes t_tx track the boundary instead of quantising to the
     // nearest whole sample (the +/-0.5-sample sawtooth, std = sample/sqrt(12) ~ 42 m at 2 MHz).
-    if( !de_mode_ )
-    {
-        return remaining_code_ / code_rate_;
-    }
-    // Double-estimator combine (Hodgart Eq.4): the SUBCARRIER delay is the precise estimate but is ambiguous
-    // mod T_s (= 1 code element here: 2 elements/chip, T_s = T_c/2). subcarrier_offset_ is the subcarrier-minus-
-    // code delay and may have locked onto any lobe (subcarrier_offset_ = n*T_s + epsilon). The code phase is
-    // unambiguous, so round the integer-T_s part away and keep only the precise sub-element refinement epsilon
-    // = subcarrier_offset_ - round(subcarrier_offset_) (T_s = 1 element), added to the code phase. Correct as
-    // long as |code error| < T_s/2 (Hodgart Eq.5), which the code DLL holds.
-    const double eps = subcarrier_offset_ - std::round( subcarrier_offset_ );
-    return ( remaining_code_ + eps ) / code_rate_;
+    // (Pilot_tracker overrides this to add the double-estimator subcarrier refinement.)
+    return remaining_code_ / code_rate_;
 }
 
 // advance_secondary_sync

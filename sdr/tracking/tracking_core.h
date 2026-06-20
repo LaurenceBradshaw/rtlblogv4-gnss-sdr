@@ -84,7 +84,7 @@ public:
                                                             // from 0.8 (~18 deg) - too strict for marginal
                                                             // low-C/N0 field signals (RTL-SDR), flapped the
                                                             // indicator without genuine carrier loss.
-    static constexpr int    LOCK_FAIL_WINDOWS       = 20;   // consecutive bad windows before loss of lock
+    static constexpr int LOCK_FAIL_WINDOWS = 20;            // consecutive bad windows before loss of lock
 
     // code_chips: raw +/-1 float chip values from Signal::code_chips()
     // sig: signal physics - chip rate (code NCO), code length, and RF carrier (used in
@@ -167,8 +167,70 @@ public:
     // virtual here (inherited from Tracker), making Tracking_core abstract.
 
 protected:
+    // Per-tap replica policies for correlate_impl (compile-time, fully inlined - no per-sample branch or
+    // virtual). Each forms tap k's reference sample at the running prompt code phase phase_P (code elements):
+    // Bpsk reads the code array directly; the double-estimator factors the BOC replica into
+    // primary[chip] x subcarrier(elem) with an independent subcarrier delay subc_off (see Pilot_tracker).
+    struct Bpsk_replica
+    {
+        const float*  code;
+        int           code_len;
+        const double* tap_off;
+        float         operator()( int k, double phase_P ) const
+        {
+            double ph = phase_P + tap_off[k];
+            if( ph < 0.0 )
+            {
+                ph += code_len;
+            }
+            else if( ph >= code_len )
+            {
+                ph -= code_len;
+            }
+            return code[static_cast<int>( ph )];
+        }
+    };
+    struct Boc_de_replica
+    {
+        const float*  code;
+        int           code_len;
+        const double* tap_off;
+        const double* tap_sc;
+        double        subc_off;
+        float         operator()( int k, double phase_P ) const
+        {
+            double cph = phase_P + tap_off[k];
+            if( cph < 0.0 )
+            {
+                cph += code_len;
+            }
+            else if( cph >= code_len )
+            {
+                cph -= code_len;
+            }
+            double sph = phase_P + subc_off + tap_sc[k];
+            if( sph < 0.0 )
+            {
+                sph += code_len;
+            }
+            else if( sph >= code_len )
+            {
+                sph -= code_len;
+            }
+            const float prim = code[static_cast<int>( cph ) | 1];              // +primary[chip] = code_[2*chip+1]
+            const float sc   = ( static_cast<int>( sph ) & 1 ) ? 1.0f : -1.0f; // subcarrier element parity
+            return prim * sc;
+        }
+    };
+
+    // The shared correlator hot loop, parameterised on a compile-time Replica policy (above) so the single
+    // loop body serves both strategies with no per-sample branch. Each subclass implements correlate() as a
+    // one-line call to this with its own policy (Costas -> Bpsk_replica; Pilot -> Boc_de_replica).
+    template <class Replica>
+    void         correlate_impl( const Sample_block& block, int n, Replica replica );
+    virtual void correlate( const Sample_block& block, int n ) = 0; // per-strategy entry (-> correlate_impl)
+
     // mirrors GNSS-SDRLIB sdrtrk.c functions
-    void correlate( const Sample_block& block, int n );
     void cumsum_corr( int polarity );
     void clear_cumsum();
     // pure_pll: full 4-quadrant atan2(Q,I) PLL discriminator (data-free pilot after secondary
@@ -182,9 +244,9 @@ protected:
     void update_lock_detectors( double prompt_i, double prompt_q );
 
     // Per-strategy hooks, called by the shared correlate()/dll_update():
-    //   configure_taps(ci): set n_taps_ and tap_offset_chips_[] (Costas 3-tap E/P/L; Pilot
-    //     5-tap VE/E/P/L/VL). ci = code elements per sample (for sample-based E/L spacing).
-    //   code_error():       normalised code discriminator (Costas E-L; Pilot VEML).
+    //   configure_taps(ci): set n_taps_, tap_offset_chips_[] and (DE) tap_sc_offset_[] (Costas 3-tap E/P/L;
+    //     Pilot 7-tap double-estimator). ci = code elements per sample (for sample-based E/L spacing).
+    //   code_error():       normalised code discriminator (Costas E-L; Pilot subcarrier-independent envelope).
     virtual void   configure_taps( double ci ) = 0;
     virtual double code_error() const          = 0;
 
@@ -212,18 +274,19 @@ protected:
     double sample_rate_;
     double ti_; // 1/sample_rate (s)
 
-    // Carrier/code NCO state - mirrors key sdrtrk_t fields
-    double acq_freq_;       // initial acquisition Doppler (Hz), used as PLL baseline
-    double code_freq_;      // current code frequency (Hz) - mirrors trk.codefreq
-    double carrier_freq_;   // current carrier frequency (Hz) - mirrors trk.carrfreq
-    double remaining_code_; // remaining code phase (chips) - mirrors trk.remcode
-    double remaining_carr_; // remaining carrier phase (rad) - mirrors trk.remcarr
-    double code_nco_;       // code NCO accumulator
-    double code_err_;       // last code error (DLL)
-    double carrier_nco_;    // carrier NCO frequency offset (Hz) - main loop output
-    double carrier_acc_;    // 3rd-order PLL acceleration integrator (inner state)
-    double carrier_err_;    // last carrier error (PLL)
-    double freq_err_;       // last frequency error (FLL)
+    // Carrier/code NCO state - mirrors key sdrtrk_t fields. Defaulted here and (re)set by initialise();
+    // the ctor only sets code_freq_ (= code_rate_), the rest start at rest.
+    double acq_freq_       = 0.0; // initial acquisition Doppler (Hz), used as PLL baseline
+    double code_freq_      = 0.0; // current code frequency (Hz) - mirrors trk.codefreq (set in ctor = code_rate_)
+    double carrier_freq_   = 0.0; // current carrier frequency (Hz) - mirrors trk.carrfreq
+    double remaining_code_ = 0.0; // remaining code phase (code elements) - mirrors trk.remcode
+    double remaining_carr_ = 0.0; // remaining carrier phase (rad) - mirrors trk.remcarr
+    double code_nco_       = 0.0; // code NCO accumulator
+    double code_err_       = 0.0; // last code error (DLL)
+    double carrier_nco_    = 0.0; // carrier NCO frequency offset (Hz) - main loop output
+    double carrier_acc_    = 0.0; // 3rd-order PLL acceleration integrator (inner state)
+    double carrier_err_    = 0.0; // last carrier error (PLL)
+    double freq_err_       = 0.0; // last frequency error (FLL)
 
     // Lock detector state (updated every epoch in correlate_epoch; see update_lock_detectors).
     double m2_sum_    = 0.0; // running sum of prompt power (I^2+Q^2) over the current window
@@ -237,49 +300,37 @@ protected:
     int    lock_fail_count_   = 0;     // consecutive completed windows failing the lock criteria
     bool   locked_            = false; // latched lock state returned by has_lock()
 
-    // Correlation output arrays: index 0=Prompt, 1=Early, 2=Late
-    // Correlator taps: index 0=Prompt, 1=Early, 2=Late (Costas). tap_offset_chips_ holds the
-    // per-tap code-phase offset (code elements); n_taps_ is how many are active.
-    int                          n_taps_;
-    std::array<double, MAX_TAPS> tap_offset_chips_;
+    // Correlator taps. tap_offset_chips_ holds each tap's code-phase offset (code elements); n_taps_ is how
+    // many are active. The tap-index meaning is set by configure_taps(): Costas uses 0=Prompt, 1=Early, 2=Late;
+    // the double-estimator pilot uses a 7-tap layout (see Pilot_tracker::configure_taps).
+    int                          n_taps_ = 3; // default Costas P/E/L; configure_taps() resets it each epoch
+    std::array<double, MAX_TAPS> tap_offset_chips_ {};
 
-    // Double-estimator (Hodgart/Blunt) BOC tracking, enabled by de_mode_ (Pilot_tracker only). The BOC replica
-    // factors as primary[chip] * subcarrier(elem) (apply_boc11: code_[2i]=-p[i], code_[2i+1]=+p[i]), so the
-    // CODE phase and the SUBCARRIER phase are tracked as two independent delays. correlate() places each tap's
-    // code component at tap_offset_chips_[k] and its subcarrier component at subcarrier_offset_ + tap_sc_offset_
-    // [k]. subcarrier_offset_ is the subcarrier-minus-code delay (the SLL state); it may lock onto ANY subcarrier
-    // lobe - the integer-T_s ambiguity is resolved in code_phase_offset_s() by rounding against the (unambiguous)
-    // code phase (Hodgart Eq.4). 0 / unused when de_mode_=false, so L1CA/BeiDou are unchanged.
-    bool                         de_mode_ = false;
-    std::array<double, MAX_TAPS> tap_sc_offset_ {};
-    double                       subcarrier_offset_ = 0.0;
-
-    // mirrors sdrtrk_t II/QQ/oldI/oldQ/sumI/sumQ/oldsumI/oldsumQ
-    std::array<double, MAX_TAPS> II_, QQ_;
-    std::array<double, MAX_TAPS> old_I_, old_Q_;
-    std::array<double, MAX_TAPS> sum_I_, sum_Q_;
-    std::array<double, MAX_TAPS> oldsum_I_, oldsum_Q_;
+    // mirrors sdrtrk_t II/QQ/oldI/oldQ/sumI/sumQ/oldsumI/oldsumQ (per-epoch and cumulative correlator I/Q)
+    std::array<double, MAX_TAPS> II_ {}, QQ_ {};
+    std::array<double, MAX_TAPS> old_I_ {}, old_Q_ {};
+    std::array<double, MAX_TAPS> sum_I_ {}, sum_Q_ {};
+    std::array<double, MAX_TAPS> oldsum_I_ {}, oldsum_Q_ {};
 
     // Data-component prompt (pilot tracking): a single prompt correlating data_code_ at the
     // pilot's code phase, giving the nav symbol. Empty data_code_ -> not used.
     std::vector<float> data_code_;
     bool               has_data_;
-    double             data_prompt_i_, data_prompt_q_;         // this epoch's data prompt
-    double             old_data_prompt_i_, old_data_prompt_q_; // previous (for nav prev-symbol)
+    double             data_prompt_i_ = 0.0, data_prompt_q_ = 0.0;         // this epoch's data prompt
+    double             old_data_prompt_i_ = 0.0, old_data_prompt_q_ = 0.0; // previous (for nav prev-symbol)
 
-    int epoch_count_; // total epochs since initialise()
+    int epoch_count_ = 0; // total epochs since initialise()
 
     // Secondary (overlay) code state - only used when secondary_ is non-empty (pilot).
-    std::vector<float> secondary_;             // overlay code chips (e.g. CS25), 1 per epoch
-    bool               secondary_sync_;        // phase acquired -> wipe-off active, FLL valid
-    int                secondary_index_;       // position in secondary_ for the next epoch
-    int                secondary_polarity_;    // +/-1, resolved at sync (carrier sign)
-    int                epoch_at_sync_   = 0;   // epoch_count_ when the secondary last synced (sync verify)
-    double             cos2phi_at_sync_ = 0.0; // carrier lock at sync time (fast degradation check)
-    std::vector<float> sec_i_hist_;            // recent prompt-I values (complex pair with sec_q_hist_)
+    std::vector<float> secondary_;                  // overlay code chips (e.g. CS25), 1 per epoch
+    bool               secondary_sync_     = false; // phase acquired -> wipe-off active, FLL valid
+    int                secondary_index_    = 0;     // position in secondary_ for the next epoch
+    int                secondary_polarity_ = 1;     // +/-1, resolved at sync (carrier sign)
+    int                epoch_at_sync_      = 0;     // epoch_count_ when the secondary last synced (sync verify)
+    double             cos2phi_at_sync_    = 0.0;   // carrier lock at sync time (fast degradation check)
+    std::vector<float> sec_i_hist_;                 // recent prompt-I values (complex pair with sec_q_hist_)
     std::vector<float> sec_q_hist_;
 
-    Tracking_loop_prm prm1_;          // loop params before nav frame sync
-    Tracking_loop_prm prm2_;          // loop params after  nav frame sync
-    int               ext_count_ = 0; // epochs accumulated in the current extended-integration window
+    Tracking_loop_prm prm1_; // loop params before nav frame sync
+    Tracking_loop_prm prm2_; // loop params after  nav frame sync
 };
