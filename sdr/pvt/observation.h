@@ -25,6 +25,17 @@ struct Satellite_measurement
     double pseudorange_rate_m_s; // m/s. Instantaneous Doppler, OR time-differenced carrier phase (see prr_from_tdcp)
     bool   prr_from_tdcp = false; // rate is from TDCP (low noise) not raw Doppler -> the solver weights it tighter
     double elevation_rad = 0.0;  // satellite elevation from the last user fix (0 until one exists); for weighting
+
+    // Carrier-phase observable for the float-ambiguity EKF. carrier_phase_m is a RANGE (m), same sign as the
+    // pseudorange and corrected the same way EXCEPT the ionosphere advances the carrier (so +iono, vs -iono for
+    // code). It carries an unknown per-arc bias (the float ambiguity, in metres) the solver estimates. The
+    // ambiguity key is (constellation, satellite_id, code, lock_session); lock_session change or cycle_slip ends
+    // the arc -> the solver re-initialises that bias. carrier_phase_valid is false when no carrier obs exists.
+    double   carrier_phase_m     = 0.0;
+    bool     carrier_phase_valid = false;
+    uint32_t lock_session        = 0;     // arc id (a change = re-acquisition = new ambiguity)
+    Code     code                = Code::CA; // signal component - part of the per-arc ambiguity key
+    bool     cycle_slip          = false; // carrier-phase discontinuity this epoch -> reset the ambiguity
 };
 
 // Iono (Klobuchar) + tropo corrections are applied here, per satellite, in generate(): the

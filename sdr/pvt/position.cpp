@@ -441,7 +441,8 @@ bool Position_solver::initialise( const std::vector<Satellite_measurement>& meas
         return false;
     }
 
-    x_.setZero();
+    x_ = Eigen::VectorXd::Zero( N ); // drop any carrier-phase ambiguity states from a previous arc
+    amb_.clear();
     x_.segment<3>( PX ) = pos.head<3>();
     x_.segment<3>( VX ) = vel.head<3>();
     x_( CB )            = pos( 3 );
@@ -456,7 +457,7 @@ bool Position_solver::initialise( const std::vector<Satellite_measurement>& meas
     }
 
     // Initial covariance: generous, so the first few updates pull the state in quickly.
-    P_.setZero();
+    P_ = Eigen::MatrixXd::Zero( N, N );
     P_( PX + 0, PX + 0 ) = P_( PX + 1, PX + 1 ) = P_( PX + 2, PX + 2 ) = 900.0; // position    (30 m)^2
     P_( VX + 0, VX + 0 ) = P_( VX + 1, VX + 1 ) = P_( VX + 2, VX + 2 ) = 100.0; // velocity    (10 m/s)^2
     P_( CB, CB )                                                       = 1.0e6; // clock bias   (1 km)^2
@@ -483,9 +484,12 @@ bool Position_solver::initialise( const std::vector<Satellite_measurement>& meas
 
 void Position_solver::predict( double dt )
 {
+    const int n_state = static_cast<int>( x_.size() );
+
     // State transition F: position integrates velocity (p += v*dt) and clock bias integrates
-    // clock drift (cb += cd*dt). Velocity and drift themselves hold.
-    Eigen::Matrix<double, N, N> F = Eigen::Matrix<double, N, N>::Identity();
+    // clock drift (cb += cd*dt). Velocity and drift themselves hold. (Any ambiguity states hold:
+    // identity block, no process noise - handled by the dynamic identity sizing.)
+    Eigen::MatrixXd F = Eigen::MatrixXd::Identity( n_state, n_state );
     for( int i = 0; i < 3; ++i )
     {
         F( PX + i, VX + i ) = dt;
@@ -495,7 +499,7 @@ void Position_solver::predict( double dt )
     // Process noise Q. Spatial part: per-axis white-noise-acceleration over each [p, v] pair.
     // Clock part: the standard [bias, drift] block - bias phase noise (CLOCK_BIAS_PSD) plus the
     // drift's contribution integrated into the bias (CLOCK_DRIFT_PSD terms).
-    Eigen::Matrix<double, N, N> Q = Eigen::Matrix<double, N, N>::Zero();
+    Eigen::MatrixXd Q = Eigen::MatrixXd::Zero( n_state, n_state );
 
     const double dt2 = dt * dt, dt3 = dt2 * dt;
     const double q_pp = ACCEL_PSD * dt3 / 3.0;
@@ -523,6 +527,12 @@ void Position_solver::predict( double dt )
         {
             Q( ISB_BASE + c, ISB_BASE + c ) = ISB_PSD * dt;
         }
+    }
+
+    // Carrier-phase ambiguity biases (states >= N): near-constant, a tiny random walk.
+    for( int j = N; j < n_state; ++j )
+    {
+        Q( j, j ) = AMB_PSD * dt;
     }
 
     x_ = F * x_;
@@ -565,21 +575,36 @@ void Position_solver::update( const std::vector<Satellite_measurement>& measurem
     std::vector<bool> prr_inlier =
         robust_velocity( sat_vel_m, sat_pos_m, prr_v, pos3, is_ref, VELOCITY_RAIM_RESIDUAL_M_S, raim_vel );
 
-    // Build each candidate measurement row, then keep only those whose innovation is plausible
+    // Pass 1: allocate / reset each SV-arc's carrier-phase ambiguity. This GROWS x_/P_ (a new arc appends a
+    // bias state), so the state dimension must be finalised HERE, before any measurement row is sized below.
+    std::vector<int> amb_idx( n, -1 );
+    if( carrier_phase_enabled_ )
+    {
+        for( int i = 0; i < n; ++i )
+        {
+            if( measurements[i].carrier_phase_valid )
+            {
+                amb_idx[i] = ensure_ambiguity( measurements[i] );
+            }
+        }
+    }
+    const int n_state = static_cast<int>( x_.size() );
+
+    // Pass 2: build each candidate measurement row, then keep only those whose innovation is plausible
     // (normalised innovation^2 = y^2 / (H P H^T + R) within the chi-square gate). This rejects
     // outliers - stale/garbage observables as channels drain at end-of-file, gross multipath -
     // so a few bad measurements cannot drag the filter off. The same row is also weighted by
     // satellite elevation through R.
-    std::vector<Eigen::Matrix<double, 1, N>> rows;
-    std::vector<double>                      ys;
-    std::vector<double>                      Rs;
+    std::vector<Eigen::RowVectorXd> rows;
+    std::vector<double>             ys;
+    std::vector<double>             Rs;
     rows.reserve( 2 * n );
     ys.reserve( 2 * n );
     Rs.reserve( 2 * n );
 
-    auto consider = [&]( const Eigen::Matrix<double, 1, N>& h, double innovation, double variance )
+    auto consider = [&]( const Eigen::RowVectorXd& h, double innovation, double variance )
     {
-        const double s = h * P_ * h.transpose() + variance;
+        const double s = ( h * P_ * h.transpose() ).value() + variance;
         if( innovation * innovation <= INNOV_GATE2 * s )
         {
             rows.push_back( h );
@@ -609,9 +634,9 @@ void Position_solver::update( const std::vector<Satellite_measurement>& measurem
 
         // Pseudorange row: pr = range + clock_bias (+ inter-system bias for non-reference
         // constellations). d/dp = -u, d/dcb = 1, d/disb[c] = 1 (non-reference only).
-        Eigen::Matrix<double, 1, N> h_pr = Eigen::Matrix<double, 1, N>::Zero();
-        h_pr.segment<3>( PX )            = -u.transpose();
-        h_pr( CB )                       = 1.0;
+        Eigen::RowVectorXd h_pr = Eigen::RowVectorXd::Zero( n_state );
+        h_pr.segment<3>( PX )   = -u.transpose();
+        h_pr( CB )              = 1.0;
         double pr_pred                   = range + cb;
         if( sm.constellation != reference_ )
         {
@@ -626,12 +651,32 @@ void Position_solver::update( const std::vector<Satellite_measurement>& measurem
         // Skipped for an SV the velocity RAIM flagged as a biased-Doppler outlier.
         if( prr_inlier[i] )
         {
-            Eigen::Matrix<double, 1, N> h_prr = Eigen::Matrix<double, 1, N>::Zero();
-            h_prr.segment<3>( VX )            = -u.transpose();
-            h_prr( CD )                       = 1.0;
+            Eigen::RowVectorXd h_prr = Eigen::RowVectorXd::Zero( n_state );
+            h_prr.segment<3>( VX )   = -u.transpose();
+            h_prr( CD )              = 1.0;
             // TDCP rates are far less noisy than Doppler ones - weight each by its own measurement model.
             const double prr_std = sm.prr_from_tdcp ? PRR_TDCP_STD_M_S : PRR_STD_M_S;
             consider( h_prr, sm.pseudorange_rate_m_s - ( ( sat_v - v ).dot( u ) + cd ), prr_std * prr_std * w );
+        }
+
+        // Carrier-phase row: cp = range + clock_bias (+ isb) + ambiguity_bias.  d/dp = -u, d/dcb = 1,
+        // d/disb = 1 (non-reference), d/dbias = 1. The low-noise carrier (PHASE_STD_M) constrains the
+        // position CHANGE precisely; the per-arc bias absorbs the unknown ambiguity. (Bias was allocated /
+        // reset in Pass 1, so a fresh arc has innovation ~0 this epoch.)
+        if( amb_idx[i] >= 0 )
+        {
+            Eigen::RowVectorXd h_cp = Eigen::RowVectorXd::Zero( n_state );
+            h_cp.segment<3>( PX )   = -u.transpose();
+            h_cp( CB )              = 1.0;
+            h_cp( amb_idx[i] )      = 1.0;
+            double cp_pred          = range + cb + x_( amb_idx[i] );
+            if( sm.constellation != reference_ )
+            {
+                const int isb_i = ISB_BASE + static_cast<int>( sm.constellation );
+                h_cp( isb_i )   = 1.0;
+                cp_pred += x_( isb_i );
+            }
+            consider( h_cp, sm.carrier_phase_m - cp_pred, PHASE_STD_M * PHASE_STD_M * w );
         }
     }
 
@@ -641,7 +686,7 @@ void Position_solver::update( const std::vector<Satellite_measurement>& measurem
         return; // nothing passed the gate - coast on the prediction
     }
 
-    Eigen::MatrixXd H = Eigen::MatrixXd::Zero( m, N );
+    Eigen::MatrixXd H = Eigen::MatrixXd::Zero( m, n_state );
     Eigen::VectorXd y( m );
     Eigen::VectorXd R( m );
     for( int i = 0; i < m; ++i )
@@ -658,8 +703,8 @@ void Position_solver::update( const std::vector<Satellite_measurement>& measurem
     Eigen::MatrixXd K = P_ * Ht * S.inverse();
 
     x_ += K * y;
-    Eigen::Matrix<double, N, N> I = Eigen::Matrix<double, N, N>::Identity();
-    P_                            = ( I - K * H ) * P_;
+    Eigen::MatrixXd I = Eigen::MatrixXd::Identity( n_state, n_state );
+    P_                = ( I - K * H ) * P_;
 }
 
 Position_solution Position_solver::as_solution() const
@@ -696,6 +741,57 @@ void Position_solver::latch_present( const std::vector<Satellite_measurement>& m
             isb_present_[c] = true;
         }
     }
+}
+
+int Position_solver::allocate_ambiguity( double init_bias )
+{
+    const int idx = static_cast<int>( x_.size() );
+    x_.conservativeResize( idx + 1 );
+    x_( idx ) = init_bias;
+    P_.conservativeResize( idx + 1, idx + 1 );
+    P_.row( idx ).setZero(); // decouple the new bias; the filter builds its correlations over the arc
+    P_.col( idx ).setZero();
+    P_( idx, idx ) = AMB_INIT_VAR_M2;
+    return idx;
+}
+
+void Position_solver::reset_ambiguity( int index, double init_bias )
+{
+    // Cycle slip / re-acquire: the bias is no longer continuous - re-seed it from the code-level prediction
+    // and blow its variance back up (and decouple it) so the carrier re-converges from scratch on this arc.
+    x_( index ) = init_bias;
+    P_.row( index ).setZero();
+    P_.col( index ).setZero();
+    P_( index, index ) = AMB_INIT_VAR_M2;
+}
+
+int Position_solver::ensure_ambiguity( const Satellite_measurement& sm )
+{
+    const Amb_key key { sm.constellation, sm.satellite_id, sm.code };
+
+    // Initialise the bias from the current (predicted) state: bias = carrier_phase - (range + cb + isb), so a
+    // fresh / reset arc has a zero carrier innovation this epoch (the bias absorbs the unknown ambiguity).
+    const Eigen::Vector3d  p = x_.segment<3>( PX );
+    const Eigen::Vector3d  sat_p( sm.satellite_pos_x, sm.satellite_pos_y, sm.satellite_pos_z );
+    const double           range = ( sat_p - p ).norm();
+    const double           isb =
+        ( sm.constellation != reference_ ) ? x_( ISB_BASE + static_cast<int>( sm.constellation ) ) : 0.0;
+    const double init_bias = sm.carrier_phase_m - ( range + x_( CB ) + isb );
+
+    auto it = amb_.find( key );
+    if( it == amb_.end() )
+    {
+        const int idx = allocate_ambiguity( init_bias );
+        amb_.emplace( key, Amb_state { idx, sm.lock_session } );
+        return idx;
+    }
+    Amb_state& a = it->second;
+    if( sm.cycle_slip || a.session != sm.lock_session ) // arc broke -> the bias is no longer continuous
+    {
+        reset_ambiguity( a.index, init_bias );
+        a.session = sm.lock_session;
+    }
+    return a.index;
 }
 
 std::optional<Position_solution>

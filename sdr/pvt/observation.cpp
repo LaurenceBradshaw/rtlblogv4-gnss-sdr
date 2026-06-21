@@ -228,6 +228,12 @@ void Observation_engine::generate(
         // have one - the solver weights each satellite by elevation. The atmospheric delays both
         // lengthen the measured range, so subtract them: tropo needs only the geometry; the Klobuchar
         // iono also needs the broadcast SF4-p18 coefficients (so it waits for those, tropo does not).
+        // Atmospheric delays, kept separate (tropo non-dispersive; iono dispersive) because they enter the
+        // CODE and CARRIER observables differently: both are delayed by the troposphere, but the ionosphere
+        // DELAYS the code (+iono) and ADVANCES the carrier (-iono). Removing them: code -= (tropo+iono),
+        // carrier -= (tropo-iono) [i.e. -tropo +iono] (the carrier correction is applied below).
+        double tropo_m = 0.0;
+        double iono_m  = 0.0;
         if( user_ecef != nullptr )
         {
             const Ecef sat_pos_ecef { m.satellite_pos_x, m.satellite_pos_y, m.satellite_pos_z };
@@ -236,14 +242,14 @@ void Observation_engine::generate(
             look_angles( *user_ecef, sat_pos_ecef, elevation_rad, azimuth_rad );
             m.elevation_rad = elevation_rad;
 
-            double correction_m = tropo_delay_m( elevation_rad, user_geo.alt_m );
+            tropo_m = tropo_delay_m( elevation_rad, user_geo.alt_m );
             if( iono_.valid && iono_.model == Iono::Model::Klobuchar )
             {
-                correction_m += klobuchar_iono_delay_m(
+                iono_m = klobuchar_iono_delay_m(
                     iono_.alpha, iono_.beta, user_geo.lat_rad, user_geo.lon_rad, elevation_rad, azimuth_rad, t_rx_gps_tow_s
                 );
             }
-            m.pseudorange_m -= correction_m;
+            m.pseudorange_m -= ( tropo_m + iono_m );
         }
 
         // Hatch carrier-smoothing (when enabled): within one continuous lock arc, blend the noisy code
@@ -272,6 +278,15 @@ void Observation_engine::generate(
             m.pseudorange_rate_m_s = tdcp_base + m.satellite_clock_drift_s_s * constants::SPEED_OF_LIGHT_M_S;
             m.prr_from_tdcp        = true;
         }
+
+        // Carrier-phase observable for the float-ambiguity EKF: corrected like the code pr (SV clock, tropo),
+        // but the ionosphere ADVANCES the carrier so +iono (vs -iono for code). The unknown per-arc bias stays
+        // in the measurement; the solver estimates it. Pass the arc id + slip so the solver resets it cleanly.
+        m.carrier_phase_m = phase_m + m.satellite_clock_offset_s * constants::SPEED_OF_LIGHT_M_S - tropo_m + iono_m;
+        m.carrier_phase_valid = true; // the solver decides whether to fuse it (Position_solver carrier-phase flag)
+        m.lock_session        = s.lock_session;
+        m.code                = s.code;
+        m.cycle_slip          = slip;
 
         if( hatch_enabled_ )
         {

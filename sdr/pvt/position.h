@@ -1,6 +1,8 @@
 #pragma once
 #include <Eigen/Dense>
+#include <map>
 #include <optional>
+#include <tuple>
 #include <vector>
 #include "observation.h"
 
@@ -62,6 +64,15 @@ public:
     std::optional<Position_solution>
     compute_solution( const std::vector<Satellite_measurement>& measurements, double rx_time_s );
 
+    // Enable tightly-coupled carrier-phase fusion (float per-arc ambiguities). OFF by default: with BROADCAST
+    // products on SHORT arcs the ambiguities can't converge (little geometry change to separate bias from
+    // position) and it degrades the code+TDCP fix - it only pays off with precise products + long arcs (PPP).
+    // The machinery is in place; flip this on when those land.
+    void set_carrier_phase_enabled( bool on )
+    {
+        carrier_phase_enabled_ = on;
+    }
+
 private:
     static constexpr int ISB_BASE = 8;                          // first inter-system-bias slot
     static constexpr int N        = ISB_BASE + NUM_CONSTELLATIONS; // state dimension (one isb per constellation)
@@ -103,6 +114,17 @@ private:
     // velocity/clock-drift solve. Good SVs sit well under 1 m/s; a biased one is tens of m/s.
     static constexpr double VELOCITY_RAIM_RESIDUAL_M_S = 5.0;
 
+    // --- carrier-phase float ambiguities (tightly-coupled code+carrier) ------------------
+    // One bias state (m) per SV-arc, appended to x_ after the base N states, keyed by (constellation, prn,
+    // code). The carrier-phase observable is range + clock + isb + bias; the bias absorbs the unknown
+    // integer-cycle ambiguity (+ the arc-start range/clock, since carrier_phase_range starts at 0 each arc).
+    // A cycle slip or a lock_session change (re-acquire) re-initialises that bias. Slots are not freed
+    // (bounded by the channel count); pruning long-dead arcs is a future refinement.
+    static constexpr double PHASE_STD_M     = 0.01;   // carrier-phase measurement noise (m, at zenith)
+    static constexpr double AMB_INIT_VAR_M2 = 1.0e6;  // initial bias variance (covers the clock-bias unknown)
+    static constexpr double AMB_PSD         = 1.0e-6; // bias random-walk PSD (m^2/s) - essentially constant
+
+    bool          carrier_phase_enabled_ = false; // tightly-coupled carrier-phase fusion (see setter)
     bool          initialised_ = false;
     double        last_time_s_ = 0.0;
     Constellation reference_   = Constellation::Gps; // set at init; its isb slot stays 0
@@ -111,8 +133,30 @@ private:
     // dropout doesn't blink the ISB display off). Reset on (re)initialise.
     bool isb_present_[NUM_CONSTELLATIONS] = {};
 
-    Eigen::Matrix<double, N, 1> x_ = Eigen::Matrix<double, N, 1>::Zero(); // state estimate
-    Eigen::Matrix<double, N, N> P_ = Eigen::Matrix<double, N, N>::Zero(); // state covariance
+    // State + covariance are DYNAMIC-size: the base N states today, growing by one float carrier-phase
+    // ambiguity per active SV-arc once carrier-phase fusion lands. The base layout (PX/VX/CB/CD/ISB) keeps
+    // its fixed indices; ambiguities occupy [N..]. Sized in initialise().
+    Eigen::VectorXd x_; // state estimate
+    Eigen::MatrixXd P_; // state covariance (sized to match x_)
+
+    // Active carrier-phase ambiguities: key (constellation, prn, code) -> its bias state index in x_ (>= N)
+    // and the lock_session of its current arc (a change re-initialises the bias). One entry per tracked SV-arc.
+    struct Amb_key
+    {
+        Constellation con;
+        Satellite_id  prn;
+        Code          code;
+        bool          operator<( const Amb_key& o ) const
+        {
+            return std::tie( con, prn, code ) < std::tie( o.con, o.prn, o.code );
+        }
+    };
+    struct Amb_state
+    {
+        int      index;
+        uint32_t session;
+    };
+    std::map<Amb_key, Amb_state> amb_;
 
     // Seed the filter with a least-squares fix on the reference constellation. Returns false if
     // no constellation yet has MIN_REFERENCE_SATS satellites.
@@ -123,6 +167,13 @@ private:
     void update( const std::vector<Satellite_measurement>& measurements );
     // Mark each non-reference constellation present in `measurements` as active (latched).
     void latch_present( const std::vector<Satellite_measurement>& measurements );
+
+    // Carrier-phase ambiguity management (Phase 2). allocate_ambiguity appends a bias state (x_/P_ grow by
+    // one); reset_ambiguity re-initialises an existing one (cycle slip / re-acquire); ensure_ambiguity does
+    // whichever is needed for this measurement's arc and returns the bias state index.
+    int  allocate_ambiguity( double init_bias );
+    void reset_ambiguity( int index, double init_bias );
+    int  ensure_ambiguity( const Satellite_measurement& sm );
 
     Position_solution as_solution() const;
 };
