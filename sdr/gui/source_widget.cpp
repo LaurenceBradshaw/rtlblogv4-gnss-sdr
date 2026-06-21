@@ -1,6 +1,4 @@
 #include "source_widget.h"
-#include <algorithm>
-#include <array>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
@@ -16,6 +14,9 @@
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
+#include <algorithm>
+#include <array>
+#include "iq_recorder.h" // with_iq_extension
 #include "receiver.h"
 
 namespace
@@ -44,8 +45,8 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     auto* root = new QVBoxLayout( this );
 
     // --- source selector ---
-    file_radio_   = new QRadioButton( QStringLiteral( "IQ file" ), this );
-    rtlsdr_radio_ = new QRadioButton( QStringLiteral( "RTL-SDR (live)" ), this );
+    file_radio_     = new QRadioButton( QStringLiteral( "IQ file" ), this );
+    rtlsdr_radio_   = new QRadioButton( QStringLiteral( "RTL-SDR (live)" ), this );
     auto* src_group = new QButtonGroup( this );
     src_group->addButton( file_radio_ );
     src_group->addButton( rtlsdr_radio_ );
@@ -57,11 +58,11 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     root->addLayout( src_row );
 
     // --- IQ file group ---
-    file_group_   = new QGroupBox( QStringLiteral( "IQ file" ), this );
+    file_group_     = new QGroupBox( QStringLiteral( "IQ file" ), this );
     auto* file_form = new QFormLayout( file_group_ );
-    file_path_    = new QLineEdit( QString::fromStdString( cfg.file_path ), file_group_);
-    auto* browse  = new QPushButton( QStringLiteral( "Browse..." ), file_group_ );
-    auto* path_row = new QHBoxLayout;
+    file_path_      = new QLineEdit( QString::fromStdString( cfg.file_path ), file_group_ );
+    auto* browse    = new QPushButton( QStringLiteral( "Browse..." ), file_group_ );
+    auto* path_row  = new QHBoxLayout;
     path_row->addWidget( file_path_ );
     path_row->addWidget( browse );
     file_form->addRow( QStringLiteral( "File:" ), path_row );
@@ -75,9 +76,9 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     root->addWidget( file_group_ );
 
     // --- RTL-SDR group ---
-    rtlsdr_group_ = new QGroupBox( QStringLiteral( "RTL-SDR" ), this );
+    rtlsdr_group_  = new QGroupBox( QStringLiteral( "RTL-SDR" ), this );
     auto* rtl_form = new QFormLayout( rtlsdr_group_ );
-    device_index_ = new QSpinBox( rtlsdr_group_ );
+    device_index_  = new QSpinBox( rtlsdr_group_ );
     device_index_->setRange( 0, 32 );
     device_index_->setValue( cfg.device_index );
     rtl_form->addRow( QStringLiteral( "Device index:" ), device_index_ );
@@ -85,7 +86,7 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     gain_->setRange( 0.0, 60.0 );
     gain_->setSingleStep( 0.5 );
     gain_->setSuffix( QStringLiteral( " dB" ) );
-    agc_ = new QCheckBox( QStringLiteral( "Hardware AGC" ), rtlsdr_group_ );
+    agc_              = new QCheckBox( QStringLiteral( "Hardware AGC" ), rtlsdr_group_ );
     const bool agc_on = cfg.gain_db < 0.0;
     agc_->setChecked( agc_on );
     gain_->setValue( agc_on ? 30.0 : cfg.gain_db );
@@ -96,8 +97,8 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     root->addWidget( rtlsdr_group_ );
 
     // --- common: native sample rate + decimation ---
-    auto* common      = new QFormLayout;
-    sample_rate_      = new QLineEdit( QString::number( cfg.sample_rate_hz ), this );
+    auto* common = new QFormLayout;
+    sample_rate_ = new QLineEdit( QString::number( cfg.sample_rate_hz ), this );
     common->addRow( QStringLiteral( "Sample rate (Hz):" ), sample_rate_ );
     decimation_ = new QSpinBox( this );
     decimation_->setRange( 1, 64 );
@@ -109,9 +110,27 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     common->addRow( QString(), effective_rate_ ); // sits under the decimation field, no label column
     hatch_ = new QCheckBox( QStringLiteral( "Hatch carrier-smoothing" ), this );
     hatch_->setChecked( cfg.hatch_enabled );
-    hatch_->setToolTip( QStringLiteral(
-        "Carrier-smooth the code pseudorange (lower noise, tighter fix). Reset on lock loss / re-acquire." ) );
+    hatch_->setToolTip(
+        QStringLiteral( "Carrier-smooth the code pseudorange (lower noise, tighter fix). Reset on lock loss / re-acquire." )
+    );
     common->addRow( QStringLiteral( "Smoothing:" ), hatch_ );
+
+    // Record the processed (post-decimation) IQ to a file, alongside normal processing. The checkbox enables
+    // it; the path field + Browse choose the output (greyed out while unchecked).
+    record_ = new QCheckBox( QStringLiteral( "Record IQ to file" ), this );
+    record_->setChecked( !cfg.record_path.empty() );
+    record_->setToolTip( QStringLiteral(
+        "Record the processed (post-decimation) IQ stream to a file as float32, alongside normal processing. "
+        "Replay with --format float32 --sample-rate <processing rate>."
+    ) );
+    common->addRow( QStringLiteral( "Recording:" ), record_ );
+    record_path_ = new QLineEdit( QString::fromStdString( cfg.record_path ), this );
+    record_path_->setPlaceholderText( QStringLiteral( "output .f32 path" ) );
+    record_browse_   = new QPushButton( QStringLiteral( "Browse..." ), this );
+    auto* record_row = new QHBoxLayout;
+    record_row->addWidget( record_path_ );
+    record_row->addWidget( record_browse_ );
+    common->addRow( QStringLiteral( "Output file:" ), record_row );
     root->addLayout( common );
 
     status_ = new QLabel( this );
@@ -124,31 +143,88 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
 
     // Wiring: browse a file, keep the file/RTL-SDR groups in step with the radio, grey the gain under AGC,
     // and re-validate live so the Start button enables/disables as inputs change.
-    connect( browse, &QPushButton::clicked, this, [this] {
-        const QString f = QFileDialog::getOpenFileName(
-            this, QStringLiteral( "Choose IQ file" ), file_path_->text(),
-            QStringLiteral( "IQ data (*.iq *.dat *.bin);;All files (*)" ) );
-        if( !f.isEmpty() )
+    connect(
+        browse,
+        &QPushButton::clicked,
+        this,
+        [this]
         {
-            file_path_->setText( f );
+            const QString f = QFileDialog::getOpenFileName(
+                this,
+                QStringLiteral( "Choose IQ file" ),
+                file_path_->text(),
+                QStringLiteral( "IQ data (*.iq *.dat *.bin *.f32);;All files (*)" )
+            );
+            if( !f.isEmpty() )
+            {
+                file_path_->setText( f );
+                validate();
+            }
+        }
+    );
+    connect(
+        file_radio_,
+        &QRadioButton::toggled,
+        this,
+        [this]
+        {
+            update_source_visibility();
             validate();
         }
-    } );
-    connect( file_radio_, &QRadioButton::toggled, this, [this] {
-        update_source_visibility();
-        validate();
-    } );
+    );
     connect( agc_, &QCheckBox::toggled, this, [this] { update_gain_enabled(); } );
     connect( file_path_, &QLineEdit::textChanged, this, [this]( const QString& ) { validate(); } );
-    connect( sample_rate_, &QLineEdit::textChanged, this, [this]( const QString& ) {
-        validate();
-        update_effective_rate();
-    } );
+    connect(
+        sample_rate_,
+        &QLineEdit::textChanged,
+        this,
+        [this]( const QString& )
+        {
+            validate();
+            update_effective_rate();
+        }
+    );
     connect( decimation_, qOverload<int>( &QSpinBox::valueChanged ), this, [this]( int ) { update_effective_rate(); } );
+    connect(
+        record_browse_,
+        &QPushButton::clicked,
+        this,
+        [this]
+        {
+            const QString f = QFileDialog::getSaveFileName(
+                this,
+                QStringLiteral( "Record IQ to" ),
+                record_path_->text(),
+                QStringLiteral( "Float32 IQ (*.f32 *.iq);;All files (*)" )
+            );
+            if( !f.isEmpty() )
+            {
+                record_path_->setText( QString::fromStdString( with_iq_extension( f.toStdString() ) ) );
+                validate();
+            }
+        }
+    );
+    connect(
+        record_,
+        &QCheckBox::toggled,
+        this,
+        [this]
+        {
+            update_record_enabled();
+            if( record_->isChecked() )
+            {
+                normalize_record_path_display(); // show the .f32/.iq extension once recording is enabled
+            }
+            validate();
+        }
+    );
+    connect( record_path_, &QLineEdit::textChanged, this, [this]( const QString& ) { validate(); } );
+    connect( record_path_, &QLineEdit::editingFinished, this, [this] { normalize_record_path_display(); } );
 
     update_source_visibility();
     update_gain_enabled();
     update_effective_rate();
+    update_record_enabled();
     validate();
 }
 
@@ -164,11 +240,10 @@ void Source_widget::update_effective_rate()
     const unsigned decim = static_cast<unsigned>( decimation_->value() );
     const double   proc  = static_cast<double>( rate ) / static_cast<double>( decim );
     effective_rate_->setText(
-        ( decim == 1 ) ? QStringLiteral( "Processing rate: %1 MHz (no decimation)" ).arg( proc / 1e6, 0, 'f', 4 )
-                       : QStringLiteral( "Processing rate: %1 MHz  (= %2 Hz / %3)" )
-                             .arg( proc / 1e6, 0, 'f', 4 )
-                             .arg( rate )
-                             .arg( decim ) );
+        ( decim == 1 )
+            ? QStringLiteral( "Processing rate: %1 MHz (no decimation)" ).arg( proc / 1e6, 0, 'f', 4 )
+            : QStringLiteral( "Processing rate: %1 MHz  (= %2 Hz / %3)" ).arg( proc / 1e6, 0, 'f', 4 ).arg( rate ).arg( decim )
+    );
 }
 
 void Source_widget::update_source_visibility()
@@ -183,6 +258,27 @@ void Source_widget::update_gain_enabled()
     gain_->setEnabled( !agc_->isChecked() );
 }
 
+void Source_widget::update_record_enabled()
+{
+    const bool on = record_->isChecked();
+    record_path_->setEnabled( on );
+    record_browse_->setEnabled( on );
+}
+
+void Source_widget::normalize_record_path_display()
+{
+    const QString cur = record_path_->text().trimmed();
+    if( cur.isEmpty() )
+    {
+        return;
+    }
+    const QString fixed = QString::fromStdString( with_iq_extension( cur.toStdString() ) );
+    if( fixed != record_path_->text() )
+    {
+        record_path_->setText( fixed ); // reflect the applied extension in the field
+    }
+}
+
 Source_params Source_widget::source_params() const
 {
     Source_params p;
@@ -194,6 +290,8 @@ Source_params Source_widget::source_params() const
     p.gain_db        = agc_->isChecked() ? -1.0 : gain_->value();
     p.decimation     = static_cast<uint32_t>( decimation_->value() );
     p.hatch_enabled  = hatch_->isChecked();
+    p.record_path =
+        record_->isChecked() ? with_iq_extension( record_path_->text().trimmed().toStdString() ) : std::string();
     return p;
 }
 
@@ -217,8 +315,8 @@ bool Source_widget::validate()
         }
     }
 
-    bool           rate_ok = false;
-    const unsigned rate    = sample_rate_->text().trimmed().toUInt( &rate_ok );
+    bool           rate_ok    = false;
+    const unsigned rate       = sample_rate_->text().trimmed().toUInt( &rate_ok );
     const bool     rate_valid = rate_ok && rate > 0;
     sample_rate_->setStyleSheet( rate_valid ? QString() : QStringLiteral( "border: 1px solid red;" ) );
     if( !rate_valid )
@@ -226,6 +324,15 @@ bool Source_widget::validate()
         if( ok ) // don't clobber a more specific file error
         {
             show_error( QStringLiteral( "Sample rate must be a positive integer (Hz)." ) );
+        }
+        ok = false;
+    }
+
+    if( record_->isChecked() && record_path_->text().trimmed().isEmpty() )
+    {
+        if( ok ) // don't clobber a more specific error
+        {
+            show_error( QStringLiteral( "Choose a record output file (or uncheck Record IQ)." ) );
         }
         ok = false;
     }
@@ -243,9 +350,13 @@ void Source_widget::set_editable( bool on )
     sample_rate_->setEnabled( on );
     decimation_->setEnabled( on );
     hatch_->setEnabled( on );
+    record_->setEnabled( on );
+    record_path_->setEnabled( on );
+    record_browse_->setEnabled( on );
     if( on )
     {
-        update_gain_enabled(); // restore the AGC-driven gain enable state
+        update_gain_enabled();   // restore the AGC-driven gain enable state
+        update_record_enabled(); // restore the record-checkbox-driven path/browse state
     }
 }
 

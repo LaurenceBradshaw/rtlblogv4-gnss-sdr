@@ -5,6 +5,7 @@
 #include <thread>
 #include "constants.h"
 #include "geodesy.h"
+#include "iq_recorder.h"
 #include "logging.h"
 #include "orbit.h"
 #include "rtlsdr_device.h"
@@ -123,6 +124,7 @@ void Receiver::set_source_params( Source_params params )
     config_.gain_db        = params.gain_db;
     config_.decimation     = std::max( 1u, params.decimation );
     config_.hatch_enabled  = params.hatch_enabled;
+    config_.record_path    = std::move( params.record_path );
 }
 
 Receiver::~Receiver() = default;
@@ -153,6 +155,27 @@ void Receiver::setup()
     // (see sample_buffer.cpp) always wakes up to find meaningful space freed.
     const size_t buffer_capacity = next_power_of_two( 2 * static_cast<size_t>( sample_rate_hz ) );
     sample_buffer_               = std::make_unique<Sample_buffer>( buffer_capacity, static_cast<double>( sample_rate_hz ) );
+
+    // Optional IQ recorder: a passive tap in the streaming callback below, recording the POST-decimation
+    // stream (what the pipeline actually processes) as float32. Does not alter the live pipeline.
+    recorder_.reset();
+    if( !config_.record_path.empty() )
+    {
+        recorder_ = std::make_unique<Iq_recorder>( config_.record_path );
+        logging::log(
+            logging::Level::Info,
+            fmt::format(
+                "Recording IQ -> {} (float32 I/Q at {} Hz); replay with --format float32 --sample-rate {}",
+                config_.record_path, sample_rate_hz, sample_rate_hz
+            )
+        );
+        if( !config_.use_rtlsdr && decim == 1 )
+        {
+            logging::log(
+                logging::Level::Info, "  (file source, no decimation: this just re-encodes the input as float32)"
+            );
+        }
+    }
 
     // Source: live RTL-SDR or recorded file, behind the Stream_device interface.
     std::string source_desc;
@@ -270,6 +293,7 @@ void Receiver::teardown()
                         // restart can re-open it - an exclusive USB device can't be opened while the old
                         // handle is still held, which made Start->Stop->Start error on the RTL-SDR source.
     decimator_.reset(); // safe now: the streaming thread (its only user) has stopped
+    recorder_.reset();  // drains + closes the record file (streaming has stopped, so no more record() calls)
     scheduler_.reset();
     pool_.reset();
     channels_.clear();
@@ -304,15 +328,26 @@ void Receiver::run()
     const auto wall_start = std::chrono::steady_clock::now();
 
     // Decimator layer (if enabled) sits here, between the source and the buffer: device -> decimator -> buffer.
+    // The optional recorder taps the SAME post-decimation buffer that feeds the pipeline (passive: it copies
+    // the samples asynchronously, so it neither alters nor stalls the live processing).
     device_->start_streaming(
         [this]( const Complex_buf& samples )
         {
             if( decimator_ )
             {
-                sample_buffer_->push( decimator_->process( samples ) );
+                const Complex_buf decimated = decimator_->process( samples );
+                if( recorder_ )
+                {
+                    recorder_->record( decimated );
+                }
+                sample_buffer_->push( decimated );
             }
             else
             {
+                if( recorder_ )
+                {
+                    recorder_->record( samples );
+                }
                 sample_buffer_->push( samples );
             }
         }

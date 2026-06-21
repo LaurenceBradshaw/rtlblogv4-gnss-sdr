@@ -1,6 +1,7 @@
 #include <cxxopts.hpp>
 #include <iostream>
 #include <string>
+#include "iq_recorder.h" // with_iq_extension
 #include "logging.h"
 #include "receiver.h"
 #include "signal_selection.h"
@@ -49,6 +50,10 @@ int main( int argc, char** argv )
           cxxopts::value<uint32_t>()->default_value( "1" ) )
         ( "hatch",       "Hatch carrier-smooth the code pseudorange (lower noise). --hatch=false to disable",
           cxxopts::value<bool>()->default_value( "true" ) )
+        ( "record",      "Also record the processed (post-decimation) IQ to this file as float32, alongside "
+                         "normal processing. Replay with --format float32 --sample-rate <processing rate>. "
+                         "With --decimate it records the decimated stream (decimation pre-process)",
+          cxxopts::value<std::string>() )
         ( "signal",      "Signal to search, repeatable: CONSTELLATION[:COMPONENT], where "
                          "CONSTELLATION=gps|galileo|beidou and COMPONENT=l1ca|l1c|e1|b1i. Omit the component "
                          "to search ALL of that constellation's components. e.g. --signal gps:l1ca "
@@ -77,6 +82,10 @@ int main( int argc, char** argv )
     config.gain_db        = result["gain"].as<double>();
     config.decimation     = std::max( 1u, result["decimate"].as<uint32_t>() );
     config.hatch_enabled  = result["hatch"].as<bool>();
+    if( result.count( "record" ) )
+    {
+        config.record_path = with_iq_extension( result["record"].as<std::string>() ); // default .f32 if no ext
+    }
 
     // The GUI's Source tab supplies the file / source params, so --file is optional under --gui.
     if( !gui && !config.use_rtlsdr && !result.count( "file" ) )

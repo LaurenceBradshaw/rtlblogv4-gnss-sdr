@@ -9,6 +9,7 @@ class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
+class QPushButton;
 class QRadioButton;
 class QSpinBox;
 class Receiver;
@@ -48,6 +49,8 @@ private:
     void update_source_visibility(); // show the file vs RTL-SDR group per the radio
     void update_gain_enabled();      // grey out the gain spin box while hardware AGC is selected
     void update_effective_rate();    // refresh the "processing rate = sample rate / decimation" read-out
+    void update_record_enabled();         // grey out the record path/browse unless "Record IQ" is checked
+    void normalize_record_path_display(); // ensure the shown record path ends in .f32/.iq (default .f32)
 
     QRadioButton*   file_radio_   = nullptr;
     QRadioButton*   rtlsdr_radio_ = nullptr;
@@ -59,6 +62,9 @@ private:
     QSpinBox*       decimation_   = nullptr; // FIR decimation factor; both sources
     QLabel*         effective_rate_ = nullptr; // live "processing rate after decimation" read-out
     QCheckBox*      hatch_        = nullptr; // Hatch carrier-smoothing of the code pseudorange (on/off)
+    QCheckBox*      record_       = nullptr; // record processed IQ to a file (on/off)
+    QLineEdit*      record_path_  = nullptr; // output path for the recording
+    QPushButton*    record_browse_ = nullptr; // pick the record output path
     QSpinBox*       device_index_ = nullptr;
     QDoubleSpinBox* gain_         = nullptr;
     QCheckBox*      agc_          = nullptr; // hardware AGC -> gain_db < 0

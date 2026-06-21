@@ -21,6 +21,7 @@ class Sample_buffer;
 class Signal;
 class Thread_pool;
 class Scheduler;
+class Iq_recorder;
 
 // How to bring the receiver up: which source, and the front-end settings. Mirrors the CLI flags,
 // but is decoupled from cxxopts so the receiver can be constructed from a GUI, a test, etc.
@@ -41,6 +42,12 @@ struct Receiver_config
     // Observation_engine::HATCH_WINDOW; this just enables/disables the smoothing.
     bool hatch_enabled = true;
 
+    // Record the processed (post-decimation) IQ stream to this file as float32, ALONGSIDE normal processing
+    // (a passive tap - does not change the live behaviour). Empty = no recording. Replay the file with
+    // --format float32 --sample-rate <processing rate>. With --decimate this records the decimated stream
+    // (a decimation pre-process); with no decimation it records the raw source (e.g. a long RTL-SDR capture).
+    std::string record_path;
+
     // Which signals to search, each with its own PRN allowlist (empty set = all PRNs in that signal's
     // range). Empty list -> default_signal_selection() (GPS L1 C/A + Galileo E1-B, all PRNs).
     // (Not named `signals` - that is a Qt macro in the GUI build.)
@@ -60,6 +67,7 @@ struct Source_params
     double           gain_db        = -1.0;    // RTL-SDR; <0 => hardware AGC
     uint32_t         decimation     = 1;       // FIR-decimate the source by this factor (1 = none)
     bool             hatch_enabled  = true;    // Hatch carrier-smoothing of the code pseudorange (on/off)
+    std::string      record_path;              // record processed IQ to this file (empty = off); see Receiver_config
 };
 
 // Timing/progress of the processing loop, published for the GUI status bar. exec = wall-clock since
@@ -182,6 +190,7 @@ private:
     std::unique_ptr<Sample_buffer>        sample_buffer_;
     std::unique_ptr<Stream_device>        device_;
     std::unique_ptr<Fir_decimator>        decimator_; // optional layer: device -> decimator -> buffer
+    std::unique_ptr<Iq_recorder>          recorder_;  // optional passive tap: records the post-decimation stream
     std::vector<std::unique_ptr<Signal>>  signals_;
     Signal_aiding                    aiding_;
     std::vector<std::unique_ptr<Channel>> channels_;
