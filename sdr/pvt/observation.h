@@ -22,7 +22,8 @@ struct Satellite_measurement
     double        pseudorange_m;
     // double       carrier_phase_cycles; // Later
     // double doppler_hz; // Later
-    double pseudorange_rate_m_s; // Calculated from Doppler, but converted to m/s for position solver convenience
+    double pseudorange_rate_m_s; // m/s. Instantaneous Doppler, OR time-differenced carrier phase (see prr_from_tdcp)
+    bool   prr_from_tdcp = false; // rate is from TDCP (low noise) not raw Doppler -> the solver weights it tighter
     double elevation_rad = 0.0;  // satellite elevation from the last user fix (0 until one exists); for weighting
 };
 
@@ -127,4 +128,26 @@ private:
     };
     std::map<int, Lockbreak_state> lockbreak_;                           // keyed by sv_key
     bool carrier_lock_slip( int sv, int lock_breaks, uint32_t session ); // updates lockbreak_
+
+    // TDCP velocity: time-differenced carrier phase. ΔΦ/Δt (Φ = carrier_phase_range_m; the integer ambiguity
+    // is a per-arc constant that cancels in the difference) is the SAME range-rate the instantaneous Doppler
+    // gives but far lower noise - valid only across a CONTINUOUS arc, so it requires no slip this epoch (else
+    // fall back to Doppler). It is the AVERAGE rate over the interval, not the instantaneous one: fine for a
+    // static / low-dynamics receiver; under acceleration it lags by ~Δt/2 (see the acceleration-model backlog
+    // item for the moving-receiver TDCP+Doppler fusion). Per-SV prev Φ + rx sample; reseeds on arc change.
+    struct Tdcp_state
+    {
+        double       prev_phase_m = 0.0;
+        Sample_index prev_sample  = 0;
+        uint32_t     session      = 0;   // arc id (lock_session)
+        bool         primed       = false;
+    };
+    std::map<int, Tdcp_state> tdcp_;                                                       // keyed by sv_key
+    // Average range-rate (m/s) over [prev epoch, now] from ΔΦ/Δt -> rate_out, returning true. Returns false
+    // (rate_out untouched) on the first epoch of an arc or a slip, so the caller keeps the Doppler rate.
+    // Updates tdcp_ every call (so the next interval is anchored even when this one fell back).
+    bool tdcp_rate(
+        int sv, double phase_m, Sample_index rx_sample, double sample_rate_hz, uint32_t session, bool slip,
+        double& rate_out
+    );
 };

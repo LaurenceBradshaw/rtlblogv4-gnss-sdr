@@ -262,6 +262,17 @@ void Observation_engine::generate(
         const bool carr_break = carrier_lock_slip( sv, s.carrier_lock_breaks, s.lock_session );
         const bool slip       = cmc_break || carr_break;
 
+        // TDCP velocity: across a continuous arc (no slip), replace the instantaneous-Doppler range-rate with
+        // the time-differenced carrier phase (same quantity, far lower noise). ΔΦ/Δt is the -λ·doppler
+        // equivalent, so re-apply the SV-clock-drift removal exactly as the Doppler path did, and flag the
+        // measurement so the solver weights it tighter. Falls back to the Doppler rate set above otherwise.
+        double tdcp_base = 0.0;
+        if( tdcp_rate( sv, phase_m, rx_sample, sample_rate_hz, s.lock_session, slip, tdcp_base ) )
+        {
+            m.pseudorange_rate_m_s = tdcp_base + m.satellite_clock_drift_s_s * constants::SPEED_OF_LIGHT_M_S;
+            m.prr_from_tdcp        = true;
+        }
+
         if( hatch_enabled_ )
         {
             Hatch_state& h = hatch_[sv];
@@ -354,6 +365,30 @@ bool Observation_engine::carrier_lock_slip( int sv, int lock_breaks, uint32_t se
     b.session = session;
     b.primed  = true;
     return slip;
+}
+
+bool Observation_engine::tdcp_rate(
+    int sv, double phase_m, Sample_index rx_sample, double sample_rate_hz, uint32_t session, bool slip,
+    double& rate_out
+)
+{
+    Tdcp_state& t  = tdcp_[sv];
+    bool        ok = false;
+    if( t.primed && t.session == session && !slip )
+    {
+        const double dt =
+            ( static_cast<int64_t>( rx_sample ) - static_cast<int64_t>( t.prev_sample ) ) / sample_rate_hz;
+        if( dt > 0.0 )
+        {
+            rate_out = ( phase_m - t.prev_phase_m ) / dt; // ambiguity cancels -> = -λ·doppler equivalent
+            ok       = true;
+        }
+    }
+    t.prev_phase_m = phase_m;
+    t.prev_sample  = rx_sample;
+    t.session      = session;
+    t.primed       = true;
+    return ok;
 }
 
 #ifdef ENABLE_UNIT_TESTS

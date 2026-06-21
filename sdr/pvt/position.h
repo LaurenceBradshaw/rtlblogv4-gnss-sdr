@@ -88,7 +88,11 @@ private:
     static constexpr double ISB_PSD = 0.1;
     // Base measurement standard deviations (at zenith); scaled by 1/sin(elevation).
     static constexpr double PR_STD_M    = 5.0; // pseudorange (m)
-    static constexpr double PRR_STD_M_S = 0.5; // pseudorange rate (m/s)
+    static constexpr double PRR_STD_M_S = 0.5; // pseudorange rate from instantaneous Doppler (m/s)
+    // Pseudorange rate from TDCP (time-differenced carrier phase) - much lower noise than Doppler, so the
+    // solver trusts it far more. Conservative fixed value; the true σ scales as ~σ_phase/Δt (a refinement
+    // parked with the acceleration-model backlog item). Set per measurement via Satellite_measurement::prr_from_tdcp.
+    static constexpr double PRR_TDCP_STD_M_S = 0.05;
     // Elevation floor for the 1/sin(el) weighting, so low/unknown-elevation sats stay finite.
     static constexpr double MIN_ELEVATION_RAD = 5.0 * 3.14159265358979323846 / 180.0;
     // Innovation gate: reject a measurement if normalised innovation^2 exceeds this (~6 sigma).

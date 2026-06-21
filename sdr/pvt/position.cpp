@@ -629,7 +629,9 @@ void Position_solver::update( const std::vector<Satellite_measurement>& measurem
             Eigen::Matrix<double, 1, N> h_prr = Eigen::Matrix<double, 1, N>::Zero();
             h_prr.segment<3>( VX )            = -u.transpose();
             h_prr( CD )                       = 1.0;
-            consider( h_prr, sm.pseudorange_rate_m_s - ( ( sat_v - v ).dot( u ) + cd ), PRR_STD_M_S * PRR_STD_M_S * w );
+            // TDCP rates are far less noisy than Doppler ones - weight each by its own measurement model.
+            const double prr_std = sm.prr_from_tdcp ? PRR_TDCP_STD_M_S : PRR_STD_M_S;
+            consider( h_prr, sm.pseudorange_rate_m_s - ( ( sat_v - v ).dot( u ) + cd ), prr_std * prr_std * w );
         }
     }
 
