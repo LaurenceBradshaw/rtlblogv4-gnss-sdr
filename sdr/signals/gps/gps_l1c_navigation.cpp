@@ -1,30 +1,14 @@
 #include "gps_l1c_navigation.h"
 #include <cmath>
 #include <cstdint>
+#include "bit_reader.h" // bits::unpacked_uint / unpacked_int (unpacked one-bit-per-element extractors)
 #include "gps_l1c_ldpc.h"
 #include "logging.h"
 
 namespace
 {
-// Bit-array readers: each element of `b` is a single 0/1 bit, MSB-first. (Our LDPC output is unpacked.)
-uint64_t bu( const uint8_t* b, int p, int n )
-{
-    uint64_t v = 0;
-    for( int i = 0; i < n; i++ )
-    {
-        v = ( v << 1 ) | ( b[p + i] & 1u );
-    }
-    return v;
-}
-int64_t bs( const uint8_t* b, int p, int n ) // two's-complement sign-extend
-{
-    uint64_t v = bu( b, p, n );
-    if( n < 64 && ( v >> ( n - 1 ) ) )
-    {
-        v |= ~0ull << n;
-    }
-    return static_cast<int64_t>( v );
-}
+// Bit-field extraction uses the shared bits::unpacked_uint / unpacked_int (each element of the buffer is a
+// single 0/1 bit, MSB-first - our LDPC output is unpacked).
 
 // CRC-24Q (poly 0x1864CFB, init 0, MSB-first) over n message bits. A frame [data | 24-bit CRC] is valid
 // iff the CRC over ALL its bits is 0 (the remainder property), so no right-pad/offset logic is needed.
@@ -165,29 +149,29 @@ void Gps_l1c_decoder::parse_sf2( const uint8_t* s )
 
     eph_.constellation = Constellation::Gps;
     eph_.prn           = satellite_id_;
-    eph_.week          = static_cast<int>( bu( s, 0, 13 ) );                      // WN
-    eph_.toe           = static_cast<double>( bu( s, 38, 11 ) ) * 300.0;          // tOE
+    eph_.week          = static_cast<int>( bits::unpacked_uint( s, 0, 13 ) );                      // WN
+    eph_.toe           = static_cast<double>( bits::unpacked_uint( s, 38, 11 ) ) * 300.0;          // tOE
     eph_.toc           = eph_.toe;                                                // CNAV-2 clock ref = toe
-    const double A     = AREF + static_cast<double>( bs( s, 49, 26 ) ) * p2( 9 ); // dA
+    const double A     = AREF + static_cast<double>( bits::unpacked_int( s, 49, 26 ) ) * p2( 9 ); // dA
     eph_.sqrt_a        = std::sqrt( A );
-    eph_.delta_n       = static_cast<double>( bs( s, 100, 17 ) ) * p2( 44 ) * PI;
-    eph_.m0            = static_cast<double>( bs( s, 140, 33 ) ) * p2( 32 ) * PI;
-    eph_.e             = static_cast<double>( bu( s, 173, 33 ) ) * p2( 34 );
-    eph_.omega         = static_cast<double>( bs( s, 206, 33 ) ) * p2( 32 ) * PI;
-    eph_.omega0        = static_cast<double>( bs( s, 239, 33 ) ) * p2( 32 ) * PI;
-    eph_.i0            = static_cast<double>( bs( s, 272, 33 ) ) * p2( 32 ) * PI;
-    eph_.omegadot      = ODOTREF + static_cast<double>( bs( s, 305, 17 ) ) * p2( 44 ) * PI;
-    eph_.idot          = static_cast<double>( bs( s, 322, 15 ) ) * p2( 44 ) * PI;
-    eph_.cis           = static_cast<double>( bs( s, 337, 16 ) ) * p2( 30 );
-    eph_.cic           = static_cast<double>( bs( s, 353, 16 ) ) * p2( 30 );
-    eph_.crs           = static_cast<double>( bs( s, 369, 24 ) ) * p2( 8 );
-    eph_.crc           = static_cast<double>( bs( s, 393, 24 ) ) * p2( 8 );
-    eph_.cus           = static_cast<double>( bs( s, 417, 21 ) ) * p2( 30 );
-    eph_.cuc           = static_cast<double>( bs( s, 438, 21 ) ) * p2( 30 );
-    eph_.af0           = static_cast<double>( bs( s, 470, 26 ) ) * p2( 35 );
-    eph_.af1           = static_cast<double>( bs( s, 496, 20 ) ) * p2( 48 );
-    eph_.af2           = static_cast<double>( bs( s, 516, 10 ) ) * p2( 60 );
-    eph_.group_delay   = static_cast<double>( bs( s, 526, 13 ) ) * p2( 35 );
+    eph_.delta_n       = static_cast<double>( bits::unpacked_int( s, 100, 17 ) ) * p2( 44 ) * PI;
+    eph_.m0            = static_cast<double>( bits::unpacked_int( s, 140, 33 ) ) * p2( 32 ) * PI;
+    eph_.e             = static_cast<double>( bits::unpacked_uint( s, 173, 33 ) ) * p2( 34 );
+    eph_.omega         = static_cast<double>( bits::unpacked_int( s, 206, 33 ) ) * p2( 32 ) * PI;
+    eph_.omega0        = static_cast<double>( bits::unpacked_int( s, 239, 33 ) ) * p2( 32 ) * PI;
+    eph_.i0            = static_cast<double>( bits::unpacked_int( s, 272, 33 ) ) * p2( 32 ) * PI;
+    eph_.omegadot      = ODOTREF + static_cast<double>( bits::unpacked_int( s, 305, 17 ) ) * p2( 44 ) * PI;
+    eph_.idot          = static_cast<double>( bits::unpacked_int( s, 322, 15 ) ) * p2( 44 ) * PI;
+    eph_.cis           = static_cast<double>( bits::unpacked_int( s, 337, 16 ) ) * p2( 30 );
+    eph_.cic           = static_cast<double>( bits::unpacked_int( s, 353, 16 ) ) * p2( 30 );
+    eph_.crs           = static_cast<double>( bits::unpacked_int( s, 369, 24 ) ) * p2( 8 );
+    eph_.crc           = static_cast<double>( bits::unpacked_int( s, 393, 24 ) ) * p2( 8 );
+    eph_.cus           = static_cast<double>( bits::unpacked_int( s, 417, 21 ) ) * p2( 30 );
+    eph_.cuc           = static_cast<double>( bits::unpacked_int( s, 438, 21 ) ) * p2( 30 );
+    eph_.af0           = static_cast<double>( bits::unpacked_int( s, 470, 26 ) ) * p2( 35 );
+    eph_.af1           = static_cast<double>( bits::unpacked_int( s, 496, 20 ) ) * p2( 48 );
+    eph_.af2           = static_cast<double>( bits::unpacked_int( s, 516, 10 ) ) * p2( 60 );
+    eph_.group_delay   = static_cast<double>( bits::unpacked_int( s, 526, 13 ) ) * p2( 35 );
     eph_.valid         = true;
 
     // TOW / transmit-time anchor. Absolute TOW = ITOW (2-hour interval of week) * 7200 + TOI * 18. Per
@@ -205,7 +189,7 @@ void Gps_l1c_decoder::parse_sf2( const uint8_t* s )
     // TOW lands 256*18=4608 s off and the SV position (computed at t_tx) is ~18000 km out. Disambiguate with
     // toe (this same CRC-valid message): the transmit time lies within the ephemeris curve-fit interval of
     // toe, while the 4608 s alias falls far outside - so pick the candidate whose TOW is closest to toe.
-    const int    itow  = static_cast<int>( bu( s, 13, 8 ) );
+    const int    itow  = static_cast<int>( bits::unpacked_uint( s, 13, 8 ) );
     const int    alias = toi_ ^ 0x100;
     const double base  = static_cast<double>( itow ) * 7200.0;
     const double tow0  = base + static_cast<double>( toi_ ) * 18.0;

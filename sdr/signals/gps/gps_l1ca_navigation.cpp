@@ -7,54 +7,10 @@
 #include <ctime>
 #include <map>
 #include "almanac.h"
+#include "bit_reader.h" // bits::packed_uint / packed_int / packed_uint2 / packed_int2
 #include "logging.h"
 
 // File-scope helpers (mirrors sdrnav.c / sdrnav_gps.c utilities)
-
-// Unsigned bit extraction from byte buffer (MSB-first).
-// mirrors RTKLIB getbitu() used throughout sdrnav_gps.c
-static uint32_t getbitu( const uint8_t* buf, int pos, int len )
-{
-    uint32_t bits = 0;
-    for( int i = pos; i < pos + len; i++ )
-    {
-        bits = ( bits << 1 ) | ( ( buf[i / 8] >> ( 7 - i % 8 ) ) & 1u );
-    }
-
-    return bits;
-}
-
-// Signed bit extraction (sign-extends result).
-// mirrors RTKLIB getbits()
-static int32_t getbits( const uint8_t* buf, int pos, int len )
-{
-    const uint32_t u = getbitu( buf, pos, len );
-    if( len > 0 && ( u >> ( len - 1 ) ) )
-    {
-        return static_cast<int32_t>( u | ( ~0u << len ) );
-    }
-
-    return static_cast<int32_t>( u );
-}
-
-// Two-field unsigned concatenation.
-// mirrors getbitu2() in sdrnav.c
-static uint32_t getbitu2( const uint8_t* b, int p1, int l1, int p2, int l2 )
-{
-    return ( getbitu( b, p1, l1 ) << l2 ) | getbitu( b, p2, l2 );
-}
-
-// Two-field signed concatenation.
-// mirrors getbits2() in sdrnav.c
-static int32_t getbits2( const uint8_t* b, int p1, int l1, int p2, int l2 )
-{
-    if( getbitu( b, p1, 1 ) )
-    {
-        return static_cast<int32_t>( ( getbits( b, p1, l1 ) << l2 ) | getbitu( b, p2, l2 ) );
-    }
-
-    return static_cast<int32_t>( getbitu2( b, p1, l1, p2, l2 ) );
-}
 
 // Pack +/-1 bit array into bytes (MSB-first, -1->bit 1, +1->bit 0).
 // mirrors bits2byte(bits, nbits, nbytes, right=0, out) in sdrnav.c
@@ -132,42 +88,42 @@ static int adjust_gps_week( int transmitted_week ) // TODO: Using system clock d
 
 static void decode_sf1( const uint8_t* buf, Gps_ephemeris& e )
 {
-    e.tow         = getbitu( buf, 30, 17 ) * 6.0;
-    e.week        = adjust_gps_week( static_cast<int>( getbitu( buf, 60, 10 ) ) );
-    e.iodc        = static_cast<int>( getbitu2( buf, 82, 2, 210, 8 ) );
-    e.group_delay = getbits( buf, 196, 8 ) * P2_31;
-    e.toc         = getbitu( buf, 218, 16 ) * 16.0;
-    e.af2         = getbits( buf, 240, 8 ) * P2_55;
-    e.af1         = getbits( buf, 248, 16 ) * P2_43;
-    e.af0         = getbits( buf, 270, 22 ) * P2_31;
+    e.tow         = bits::packed_uint( buf, 30, 17 ) * 6.0;
+    e.week        = adjust_gps_week( static_cast<int>( bits::packed_uint( buf, 60, 10 ) ) );
+    e.iodc        = static_cast<int>( bits::packed_uint2( buf, 82, 2, 210, 8 ) );
+    e.group_delay = bits::packed_int( buf, 196, 8 ) * P2_31;
+    e.toc         = bits::packed_uint( buf, 218, 16 ) * 16.0;
+    e.af2         = bits::packed_int( buf, 240, 8 ) * P2_55;
+    e.af1         = bits::packed_int( buf, 248, 16 ) * P2_43;
+    e.af0         = bits::packed_int( buf, 270, 22 ) * P2_31;
 }
 
 static void decode_sf2( const uint8_t* buf, Gps_ephemeris& e )
 {
-    e.tow     = getbitu( buf, 30, 17 ) * 6.0;
-    e.iode    = static_cast<int>( getbitu( buf, 60, 8 ) );
-    e.crs     = getbits( buf, 68, 16 ) * P2_5;
-    e.delta_n = getbits( buf, 90, 16 ) * P2_43 * SC2RAD;
-    e.m0      = getbits2( buf, 106, 8, 120, 24 ) * P2_31 * SC2RAD;
-    e.cuc     = getbits( buf, 150, 16 ) * P2_29;
-    e.e       = getbitu2( buf, 166, 8, 180, 24 ) * P2_33;
-    e.cus     = getbits( buf, 210, 16 ) * P2_29;
-    e.sqrt_a  = getbitu2( buf, 226, 8, 240, 24 ) * P2_19;
-    e.toe     = getbitu( buf, 270, 16 ) * 16.0;
+    e.tow     = bits::packed_uint( buf, 30, 17 ) * 6.0;
+    e.iode    = static_cast<int>( bits::packed_uint( buf, 60, 8 ) );
+    e.crs     = bits::packed_int( buf, 68, 16 ) * P2_5;
+    e.delta_n = bits::packed_int( buf, 90, 16 ) * P2_43 * SC2RAD;
+    e.m0      = bits::packed_int2( buf, 106, 8, 120, 24 ) * P2_31 * SC2RAD;
+    e.cuc     = bits::packed_int( buf, 150, 16 ) * P2_29;
+    e.e       = bits::packed_uint2( buf, 166, 8, 180, 24 ) * P2_33;
+    e.cus     = bits::packed_int( buf, 210, 16 ) * P2_29;
+    e.sqrt_a  = bits::packed_uint2( buf, 226, 8, 240, 24 ) * P2_19;
+    e.toe     = bits::packed_uint( buf, 270, 16 ) * 16.0;
 }
 
 static void decode_sf3( const uint8_t* buf, Gps_ephemeris& e )
 {
-    e.tow      = getbitu( buf, 30, 17 ) * 6.0;
-    e.cic      = getbits( buf, 60, 16 ) * P2_29;
-    e.omega0   = getbits2( buf, 76, 8, 90, 24 ) * P2_31 * SC2RAD;
-    e.cis      = getbits( buf, 120, 16 ) * P2_29;
-    e.i0       = getbits2( buf, 136, 8, 150, 24 ) * P2_31 * SC2RAD;
-    e.crc      = getbits( buf, 180, 16 ) * P2_5;
-    e.omega    = getbits2( buf, 196, 8, 210, 24 ) * P2_31 * SC2RAD;
-    e.omegadot = getbits( buf, 240, 24 ) * P2_43 * SC2RAD;
-    e.iode     = static_cast<int>( getbitu( buf, 270, 8 ) );
-    e.idot     = getbits( buf, 278, 14 ) * P2_43 * SC2RAD;
+    e.tow      = bits::packed_uint( buf, 30, 17 ) * 6.0;
+    e.cic      = bits::packed_int( buf, 60, 16 ) * P2_29;
+    e.omega0   = bits::packed_int2( buf, 76, 8, 90, 24 ) * P2_31 * SC2RAD;
+    e.cis      = bits::packed_int( buf, 120, 16 ) * P2_29;
+    e.i0       = bits::packed_int2( buf, 136, 8, 150, 24 ) * P2_31 * SC2RAD;
+    e.crc      = bits::packed_int( buf, 180, 16 ) * P2_5;
+    e.omega    = bits::packed_int2( buf, 196, 8, 210, 24 ) * P2_31 * SC2RAD;
+    e.omegadot = bits::packed_int( buf, 240, 24 ) * P2_43 * SC2RAD;
+    e.iode     = static_cast<int>( bits::packed_uint( buf, 270, 8 ) );
+    e.idot     = bits::packed_int( buf, 278, 14 ) * P2_43 * SC2RAD;
 }
 
 // Subframe 4 is subcommutated over 25 pages; only page 18 (identified by SV ID 56 in word 3)
@@ -176,21 +132,21 @@ static void decode_sf3( const uint8_t* buf, Gps_ephemeris& e )
 // 20.3.3.5.1.7 / 20.3.3.5.2.4, scale factors mirror RTKLIB decode_subfrm4().
 static void decode_sf4( const uint8_t* buf, Iono& iono )
 {
-    const int sv_id = static_cast<int>( getbitu( buf, 62, 6 ) ); // page id (data ID is bits 60-61)
+    const int sv_id = static_cast<int>( bits::packed_uint( buf, 62, 6 ) ); // page id (data ID is bits 60-61)
     if( sv_id != 56 )
     {
         return; // almanac / other page
     }
 
-    iono.alpha[0]     = getbits( buf, 68, 8 ) * P2_30;
-    iono.alpha[1]     = getbits( buf, 76, 8 ) * P2_27;
-    iono.alpha[2]     = getbits( buf, 90, 8 ) * P2_24;
-    iono.alpha[3]     = getbits( buf, 98, 8 ) * P2_24;
-    iono.beta[0]      = getbits( buf, 106, 8 ) * 2048.0;  // 2^11
-    iono.beta[1]      = getbits( buf, 120, 8 ) * 16384.0; // 2^14
-    iono.beta[2]      = getbits( buf, 128, 8 ) * 65536.0; // 2^16
-    iono.beta[3]      = getbits( buf, 136, 8 ) * 65536.0; // 2^16
-    iono.leap_seconds = getbits( buf, 240, 8 );           // dt_LS (word 9)
+    iono.alpha[0]     = bits::packed_int( buf, 68, 8 ) * P2_30;
+    iono.alpha[1]     = bits::packed_int( buf, 76, 8 ) * P2_27;
+    iono.alpha[2]     = bits::packed_int( buf, 90, 8 ) * P2_24;
+    iono.alpha[3]     = bits::packed_int( buf, 98, 8 ) * P2_24;
+    iono.beta[0]      = bits::packed_int( buf, 106, 8 ) * 2048.0;  // 2^11
+    iono.beta[1]      = bits::packed_int( buf, 120, 8 ) * 16384.0; // 2^14
+    iono.beta[2]      = bits::packed_int( buf, 128, 8 ) * 65536.0; // 2^16
+    iono.beta[3]      = bits::packed_int( buf, 136, 8 ) * 65536.0; // 2^16
+    iono.leap_seconds = bits::packed_int( buf, 240, 8 );           // dt_LS (word 9)
     iono.model        = Iono::Model::Klobuchar;
     iono.valid        = true;
 }
@@ -203,7 +159,7 @@ static void decode_sf4( const uint8_t* buf, Iono& iono )
 // only toa-within-week. Returns the PRN (and fills alm[prn]) if this was an almanac page, else 0.
 static int decode_almanac( const uint8_t* buf, int sfn, int week, std::map<int, Almanac>& alm )
 {
-    const int  svid        = static_cast<int>( getbitu( buf, 62, 6 ) ); // page SV ID (== the PRN for almanac pages)
+    const int  svid        = static_cast<int>( bits::packed_uint( buf, 62, 6 ) ); // page SV ID (== the PRN for almanac pages)
     const bool is_alm_page = ( sfn == 5 && svid >= 1 && svid <= 24 ) || ( sfn == 4 && svid >= 25 && svid <= 32 );
     if( !is_alm_page )
     {
@@ -213,19 +169,19 @@ static int decode_almanac( const uint8_t* buf, int sfn, int week, std::map<int, 
     Almanac a;
     a.constellation = Constellation::Gps;
     a.prn           = static_cast<Satellite_id>( svid );
-    a.e             = getbitu( buf, 68, 16 ) * P2_21;
-    a.toa           = getbitu( buf, 90, 8 ) * 4096.0;                    // 2^12
-    a.i0            = ( 0.3 + getbits( buf, 98, 16 ) * P2_19 ) * SC2RAD; // 0.3 semicircles reference + delta_i
-    a.omegadot      = getbits( buf, 120, 16 ) * P2_38 * SC2RAD;
-    a.health        = static_cast<int>( getbitu( buf, 136, 8 ) );
-    a.sqrt_a        = getbitu( buf, 150, 24 ) * P2_11;
-    a.omega0        = getbits( buf, 180, 24 ) * P2_23 * SC2RAD;
-    a.omega         = getbits( buf, 210, 24 ) * P2_23 * SC2RAD;
-    a.m0            = getbits( buf, 240, 24 ) * P2_23 * SC2RAD;
+    a.e             = bits::packed_uint( buf, 68, 16 ) * P2_21;
+    a.toa           = bits::packed_uint( buf, 90, 8 ) * 4096.0;                    // 2^12
+    a.i0            = ( 0.3 + bits::packed_int( buf, 98, 16 ) * P2_19 ) * SC2RAD; // 0.3 semicircles reference + delta_i
+    a.omegadot      = bits::packed_int( buf, 120, 16 ) * P2_38 * SC2RAD;
+    a.health        = static_cast<int>( bits::packed_uint( buf, 136, 8 ) );
+    a.sqrt_a        = bits::packed_uint( buf, 150, 24 ) * P2_11;
+    a.omega0        = bits::packed_int( buf, 180, 24 ) * P2_23 * SC2RAD;
+    a.omega         = bits::packed_int( buf, 210, 24 ) * P2_23 * SC2RAD;
+    a.m0            = bits::packed_int( buf, 240, 24 ) * P2_23 * SC2RAD;
     // af0 (11-bit, signed) is split: 8 MSBs at 270, 3 LSBs at 289 (af1 sits between). Mirror RTKLIB exactly.
-    const int af0_8 = static_cast<int>( getbits( buf, 270, 8 ) );
-    a.af1           = getbits( buf, 278, 11 ) * P2_38;
-    a.af0           = getbitu( buf, 289, 3 ) * P2_17 + af0_8 * P2_20;
+    const int af0_8 = static_cast<int>( bits::packed_int( buf, 270, 8 ) );
+    a.af1           = bits::packed_int( buf, 278, 11 ) * P2_38;
+    a.af0           = bits::packed_uint( buf, 289, 3 ) * P2_17 + af0_8 * P2_20;
     a.week          = week;
     a.valid         = true;
     alm[svid]       = a;
@@ -237,7 +193,7 @@ static int decode_almanac( const uint8_t* buf, int sfn, int week, std::map<int, 
 // Returns the subframe number (1-5), or 0 on error.
 static int decode_gps_frame( const uint8_t* buf, Gps_ephemeris& eph, Iono& iono )
 {
-    const int id = static_cast<int>( getbitu( buf, 49, 3 ) );
+    const int id = static_cast<int>( bits::packed_uint( buf, 49, 3 ) );
     switch( id )
     {
     case 1:
@@ -539,7 +495,7 @@ void Gps_l1ca_decoder::decode_subframe()
     // The TOW is the HOW count (bits 30..46) x 6 s. A valid TOW-count is 0..100799 (one week); an
     // out-of-range count is an impossible time, so the subframe is corrupted / a false-preamble match -
     // drop it WITHOUT touching the TOW anchor (belt-and-braces with the cadence gate in find_preamble).
-    const uint32_t tow_count = static_cast<uint32_t>( getbitu( bin, 30, 17 ) );
+    const uint32_t tow_count = static_cast<uint32_t>( bits::packed_uint( bin, 30, 17 ) );
     if( tow_count > 100799 )
     {
         return;
@@ -718,29 +674,29 @@ Gps_l1ca_decoder::Tow_status Gps_l1ca_decoder::classify_tow( double tow )
 #include <catch2/catch_test_macros.hpp>
 #include "orbit.h"
 
-TEST_CASE( "gps_getbitu_extracts_msb_first", "[gps][nav][bits]" )
+TEST_CASE( "gps_packed_uint_extracts_msb_first", "[gps][nav][bits]" )
 {
     // 0xB4 = 1011 0100, 0xF0 = 1111 0000.
     const uint8_t buf[2] = { 0xB4, 0xF0 };
-    REQUIRE( getbitu( buf, 0, 8 ) == 0xB4u );
-    REQUIRE( getbitu( buf, 0, 4 ) == 0b1011u );
-    REQUIRE( getbitu( buf, 4, 4 ) == 0b0100u );
-    REQUIRE( getbitu( buf, 1, 3 ) == 0b011u );
-    REQUIRE( getbitu( buf, 6, 4 ) == 0b0011u ); // crosses the byte boundary (..00|11..)
-    REQUIRE( getbitu( buf, 0, 16 ) == 0xB4F0u );
+    REQUIRE( bits::packed_uint( buf, 0, 8 ) == 0xB4u );
+    REQUIRE( bits::packed_uint( buf, 0, 4 ) == 0b1011u );
+    REQUIRE( bits::packed_uint( buf, 4, 4 ) == 0b0100u );
+    REQUIRE( bits::packed_uint( buf, 1, 3 ) == 0b011u );
+    REQUIRE( bits::packed_uint( buf, 6, 4 ) == 0b0011u ); // crosses the byte boundary (..00|11..)
+    REQUIRE( bits::packed_uint( buf, 0, 16 ) == 0xB4F0u );
 }
 
-TEST_CASE( "gps_getbits_sign_extends", "[gps][nav][bits]" )
+TEST_CASE( "gps_packed_int_sign_extends", "[gps][nav][bits]" )
 {
     const uint8_t ff[1]  = { 0xFF }; // 8-bit -1
     const uint8_t x80[1] = { 0x80 }; // 8-bit -128
     const uint8_t x40[1] = { 0x40 }; // 8-bit +64
-    REQUIRE( getbits( ff, 0, 8 ) == -1 );
-    REQUIRE( getbits( x80, 0, 8 ) == -128 );
-    REQUIRE( getbits( x40, 0, 8 ) == 64 );
-    REQUIRE( getbits( ff, 0, 4 ) == -1 );    // 0b1111 sign-extended
-    REQUIRE( getbits( x40, 1, 2 ) == -2 );   // bits 1..2 of 0100 0000 = 0b10 = -2
-    REQUIRE( getbitu( x80, 0, 8 ) == 128u ); // unsigned counterpart differs
+    REQUIRE( bits::packed_int( ff, 0, 8 ) == -1 );
+    REQUIRE( bits::packed_int( x80, 0, 8 ) == -128 );
+    REQUIRE( bits::packed_int( x40, 0, 8 ) == 64 );
+    REQUIRE( bits::packed_int( ff, 0, 4 ) == -1 );    // 0b1111 sign-extended
+    REQUIRE( bits::packed_int( x40, 1, 2 ) == -2 );   // bits 1..2 of 0100 0000 = 0b10 = -2
+    REQUIRE( bits::packed_uint( x80, 0, 8 ) == 128u ); // unsigned counterpart differs
 }
 
 TEST_CASE( "gps_parity_check_word_detects_single_bit_errors", "[gps][nav][parity]" )
@@ -891,9 +847,9 @@ TEST_CASE( "gps_how_tow_count_range_guard", "[gps][nav][tow]" )
     const auto sf3 = sf_from_hex( CTTC_PRN1_SF3 );
 
     // (1) Real subframes carry a VALID TOW-count, so the guard never drops genuine data.
-    const uint32_t c1 = getbitu( sf1.data(), 30, 17 );
-    const uint32_t c2 = getbitu( sf2.data(), 30, 17 );
-    const uint32_t c3 = getbitu( sf3.data(), 30, 17 );
+    const uint32_t c1 = bits::packed_uint( sf1.data(), 30, 17 );
+    const uint32_t c2 = bits::packed_uint( sf2.data(), 30, 17 );
+    const uint32_t c3 = bits::packed_uint( sf3.data(), 30, 17 );
     REQUIRE( c1 <= 100799u );
     REQUIRE( c2 <= 100799u );
     REQUIRE( c3 <= 100799u );
@@ -903,7 +859,7 @@ TEST_CASE( "gps_how_tow_count_range_guard", "[gps][nav][tow]" )
     REQUIRE( c2 == c1 + 1 );
     REQUIRE( c3 == c2 + 1 );
 
-    // (3) Threshold boundary. Set bits 30..46 (RTKLIB MSB-first, matching getbitu) to chosen counts and
+    // (3) Threshold boundary. Set bits 30..46 (RTKLIB MSB-first, matching packed_uint) to chosen counts and
     // confirm the > 100799 guard fires exactly at 100800 (one full week of 6 s counts), not at 100799.
     auto set_bits = []( uint8_t* buf, int pos, int len, uint32_t val )
     {
@@ -920,11 +876,11 @@ TEST_CASE( "gps_how_tow_count_range_guard", "[gps][nav][tow]" )
     };
     auto bad = sf_from_hex( CTTC_PRN1_SF1 );
     set_bits( bad.data(), 30, 17, 100799u ); // max valid count -> accepted (NOT > 100799)
-    REQUIRE( getbitu( bad.data(), 30, 17 ) == 100799u );
-    REQUIRE_FALSE( getbitu( bad.data(), 30, 17 ) > 100799u );
+    REQUIRE( bits::packed_uint( bad.data(), 30, 17 ) == 100799u );
+    REQUIRE_FALSE( bits::packed_uint( bad.data(), 30, 17 ) > 100799u );
     set_bits( bad.data(), 30, 17, 100800u ); // first impossible count -> dropped
-    REQUIRE( getbitu( bad.data(), 30, 17 ) > 100799u );
+    REQUIRE( bits::packed_uint( bad.data(), 30, 17 ) > 100799u );
     set_bits( bad.data(), 30, 17, 0x1FFFFu ); // all-ones 17-bit field (a typical garbage decode)
-    REQUIRE( getbitu( bad.data(), 30, 17 ) > 100799u );
+    REQUIRE( bits::packed_uint( bad.data(), 30, 17 ) > 100799u );
 }
 #endif

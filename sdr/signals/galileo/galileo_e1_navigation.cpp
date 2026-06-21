@@ -1,7 +1,9 @@
 #include "galileo_e1_navigation.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include "bit_reader.h" // bits::unpacked_uint / unpacked_int (unpacked one-bit-per-element extractors)
 #include "logging.h"
 
 namespace
@@ -122,32 +124,6 @@ uint32_t crc24q( const int* bits, int n )
         }
     }
     return crc;
-}
-
-uint32_t bits_to_uint( const int* bits, int start, int len )
-{
-    uint32_t v = 0;
-    for( int i = 0; i < len; i++ )
-    {
-        v = ( v << 1 ) | static_cast<uint32_t>( bits[start + i] & 1 );
-    }
-    return v;
-}
-
-// I/NAV field readers. The Galileo SIS-ICD bit tables are 1-based from the start of the
-// 128-bit Data_jk word; jk[] here is 0-based MSB-first, so position p maps to index p-1.
-uint32_t read_u( const int* jk, int start, int len )
-{
-    return bits_to_uint( jk, start - 1, len );
-}
-int64_t read_s( const int* jk, int start, int len )
-{
-    const uint32_t u = read_u( jk, start, len );
-    if( ( u >> ( len - 1 ) ) & 1u ) // sign bit set -> two's complement
-    {
-        return static_cast<int64_t>( u ) - ( static_cast<int64_t>( 1 ) << len );
-    }
-    return static_cast<int64_t>( u );
 }
 
 // LSB scale factors (Galileo OS SIS-ICD), from gnss-sdr MATH_CONSTANTS.h.
@@ -284,7 +260,7 @@ void Galileo_e1b_decoder::decode_page_part()
     have_even_ = false;
 
     const uint32_t computed = crc24q( page.data(), 196 );
-    const uint32_t checksum = bits_to_uint( page.data(), 196, 24 );
+    const uint64_t checksum = bits::unpacked_uint( page.data(), 196, 24 );
     if( computed == checksum )
     {
         crc_ok_++;
@@ -313,7 +289,7 @@ void Galileo_e1b_decoder::decode_page_part()
 // galileo_inav_message.cc read_page_1..5; bit positions/scales from Galileo_INAV.h.
 void Galileo_e1b_decoder::extract_word( const int* jk )
 {
-    const int word_type = static_cast<int>( read_u( jk, 1, 6 ) );
+    const int word_type = static_cast<int>( bits::unpacked_uint( jk, 0, 6 ) );
 
     // Words 1-4 share an IODnav; a change starts a fresh ephemeris set (word 5 is independent).
     auto check_iod = [&]( int iod )
@@ -330,45 +306,45 @@ void Galileo_e1b_decoder::extract_word( const int* jk )
     switch( word_type )
     {
     case 1: // Ephemeris (1/4)
-        check_iod( static_cast<int>( read_u( jk, 7, 10 ) ) );
-        eph_.toe    = static_cast<double>( read_u( jk, 17, 14 ) ) * 60.0;
-        eph_.m0     = static_cast<double>( read_s( jk, 31, 32 ) ) * PI_TWO_N31;
-        eph_.e      = static_cast<double>( read_u( jk, 63, 32 ) ) * TWO_N33;
-        eph_.sqrt_a = static_cast<double>( read_u( jk, 95, 32 ) ) * TWO_N19;
+        check_iod( static_cast<int>( bits::unpacked_uint( jk, 6, 10 ) ) );
+        eph_.toe    = static_cast<double>( bits::unpacked_uint( jk, 16, 14 ) ) * 60.0;
+        eph_.m0     = static_cast<double>( bits::unpacked_int( jk, 30, 32 ) ) * PI_TWO_N31;
+        eph_.e      = static_cast<double>( bits::unpacked_uint( jk, 62, 32 ) ) * TWO_N33;
+        eph_.sqrt_a = static_cast<double>( bits::unpacked_uint( jk, 94, 32 ) ) * TWO_N19;
         eph_words_ |= 0x1;
         break;
     case 2: // Ephemeris (2/4)
-        check_iod( static_cast<int>( read_u( jk, 7, 10 ) ) );
-        eph_.omega0 = static_cast<double>( read_s( jk, 17, 32 ) ) * PI_TWO_N31;
-        eph_.i0     = static_cast<double>( read_s( jk, 49, 32 ) ) * PI_TWO_N31;
-        eph_.omega  = static_cast<double>( read_s( jk, 81, 32 ) ) * PI_TWO_N31;
-        eph_.idot   = static_cast<double>( read_s( jk, 113, 14 ) ) * PI_TWO_N43;
+        check_iod( static_cast<int>( bits::unpacked_uint( jk, 6, 10 ) ) );
+        eph_.omega0 = static_cast<double>( bits::unpacked_int( jk, 16, 32 ) ) * PI_TWO_N31;
+        eph_.i0     = static_cast<double>( bits::unpacked_int( jk, 48, 32 ) ) * PI_TWO_N31;
+        eph_.omega  = static_cast<double>( bits::unpacked_int( jk, 80, 32 ) ) * PI_TWO_N31;
+        eph_.idot   = static_cast<double>( bits::unpacked_int( jk, 112, 14 ) ) * PI_TWO_N43;
         eph_words_ |= 0x2;
         break;
     case 3: // Ephemeris (3/4) + SISA
-        check_iod( static_cast<int>( read_u( jk, 7, 10 ) ) );
-        eph_.omegadot = static_cast<double>( read_s( jk, 17, 24 ) ) * PI_TWO_N43;
-        eph_.delta_n  = static_cast<double>( read_s( jk, 41, 16 ) ) * PI_TWO_N43;
-        eph_.cuc      = static_cast<double>( read_s( jk, 57, 16 ) ) * TWO_N29;
-        eph_.cus      = static_cast<double>( read_s( jk, 73, 16 ) ) * TWO_N29;
-        eph_.crc      = static_cast<double>( read_s( jk, 89, 16 ) ) * TWO_N5;
-        eph_.crs      = static_cast<double>( read_s( jk, 105, 16 ) ) * TWO_N5;
-        eph_.sisa     = static_cast<int>( read_u( jk, 121, 8 ) );
+        check_iod( static_cast<int>( bits::unpacked_uint( jk, 6, 10 ) ) );
+        eph_.omegadot = static_cast<double>( bits::unpacked_int( jk, 16, 24 ) ) * PI_TWO_N43;
+        eph_.delta_n  = static_cast<double>( bits::unpacked_int( jk, 40, 16 ) ) * PI_TWO_N43;
+        eph_.cuc      = static_cast<double>( bits::unpacked_int( jk, 56, 16 ) ) * TWO_N29;
+        eph_.cus      = static_cast<double>( bits::unpacked_int( jk, 72, 16 ) ) * TWO_N29;
+        eph_.crc      = static_cast<double>( bits::unpacked_int( jk, 88, 16 ) ) * TWO_N5;
+        eph_.crs      = static_cast<double>( bits::unpacked_int( jk, 104, 16 ) ) * TWO_N5;
+        eph_.sisa     = static_cast<int>( bits::unpacked_uint( jk, 120, 8 ) );
         eph_words_ |= 0x4;
         break;
     case 4: // Ephemeris (4/4) + clock correction
-        check_iod( static_cast<int>( read_u( jk, 7, 10 ) ) );
-        eph_.cic = static_cast<double>( read_s( jk, 23, 16 ) ) * TWO_N29;
-        eph_.cis = static_cast<double>( read_s( jk, 39, 16 ) ) * TWO_N29;
-        eph_.toc = static_cast<double>( read_u( jk, 55, 14 ) ) * 60.0;
-        eph_.af0 = static_cast<double>( read_s( jk, 69, 31 ) ) * TWO_N34;
-        eph_.af1 = static_cast<double>( read_s( jk, 100, 21 ) ) * TWO_N46;
-        eph_.af2 = static_cast<double>( read_s( jk, 121, 6 ) ) * TWO_N59;
+        check_iod( static_cast<int>( bits::unpacked_uint( jk, 6, 10 ) ) );
+        eph_.cic = static_cast<double>( bits::unpacked_int( jk, 22, 16 ) ) * TWO_N29;
+        eph_.cis = static_cast<double>( bits::unpacked_int( jk, 38, 16 ) ) * TWO_N29;
+        eph_.toc = static_cast<double>( bits::unpacked_uint( jk, 54, 14 ) ) * 60.0;
+        eph_.af0 = static_cast<double>( bits::unpacked_int( jk, 68, 31 ) ) * TWO_N34;
+        eph_.af1 = static_cast<double>( bits::unpacked_int( jk, 99, 21 ) ) * TWO_N46;
+        eph_.af2 = static_cast<double>( bits::unpacked_int( jk, 120, 6 ) ) * TWO_N59;
         eph_words_ |= 0x8;
         break;
     case 5: // GST week + time of week (also iono/BGD/health, not extracted)
-        eph_.week = static_cast<int>( read_u( jk, 74, 12 ) );
-        eph_.tow  = static_cast<double>( read_u( jk, 86, 20 ) );
+        eph_.week = static_cast<int>( bits::unpacked_uint( jk, 73, 12 ) );
+        eph_.tow  = static_cast<double>( bits::unpacked_uint( jk, 85, 20 ) );
         eph_words_ |= 0x10;
         // Anchor the SV transmit-time clock. TOW5 is the GST at the even-page-part preamble; we
         // are now at the end of the odd part, (2*PAGE_PART_SYMS - 1) = 499 symbols later (see
@@ -377,6 +353,12 @@ void Galileo_e1b_decoder::extract_word( const int* jk )
         tow_ref_symbol_ = symbol_count_ - ( 2 * PAGE_PART_SYMS - 1 );
         tow_anchored_   = true;
         tow_confirmed_  = true;
+        break;
+    case 7:  // Reduced almanac SVID1 (1/2)
+    case 8:  // Reduced almanac SVID1 (2/2) + SVID2 (1/2)
+    case 9:  // Reduced almanac SVID2 (2/2) + SVID3 (1/2)
+    case 10: // Reduced almanac SVID3 (2/2)
+        store_almanac_word( word_type, jk );
         break;
     default:
         break;
@@ -405,6 +387,104 @@ void Galileo_e1b_decoder::extract_word( const int* jk )
             )
         );
     }
+}
+
+// Buffer one reduced-almanac word (type 7-10) and its IODa. Once all four are present with a matching IODa,
+// assemble the 3 SVs. The four word types subcommutate over the broadcast, so they arrive non-contiguously.
+void Galileo_e1b_decoder::store_almanac_word( int word_type, const int* jk )
+{
+    const int idx = word_type - 7; // 0..3
+    std::copy( jk, jk + 128, alm_words_[idx].begin() );
+    alm_ioda_[idx] = static_cast<int>( bits::unpacked_uint( jk, 6, 4 ) );
+
+    const bool all_present = std::all_of( alm_ioda_.begin(), alm_ioda_.end(), []( int v ) { return v >= 0; } );
+    const bool ioda_match  = all_present && alm_ioda_[0] == alm_ioda_[1] && alm_ioda_[0] == alm_ioda_[2]
+                          && alm_ioda_[0] == alm_ioda_[3];
+    if( ioda_match && alm_ioda_[0] != alm_decoded_ioda_ )
+    {
+        assemble_almanac();
+    }
+}
+
+// Decode the 3 reduced-almanac SVs from the four buffered words (7,8,9,10) into almanac_. Bit layout +
+// scales from RTKLIB decode_gal_inav_alm / set_gal_alm (positions are 0-based from each word's first bit).
+void Galileo_e1b_decoder::assemble_almanac()
+{
+    const int* w7  = alm_words_[0].data();
+    const int* w8  = alm_words_[1].data();
+    const int* w9  = alm_words_[2].data();
+    const int* w10 = alm_words_[3].data();
+
+    const double toa = bits::unpacked_uint( w7, 12, 10 ) * 600.0;
+    // The 2-bit WNa (bits 11-12 of word 7) only disambiguates the week modulo 4, so we ignore it and use the
+    // GST week we are decoding (the almanac toa is within the broadcasting SV's current week). Coarse-orbit
+    // aiding is insensitive to this.
+    const int week = ( eph_words_ & 0x10 ) ? eph_.week : 0;
+
+    // Each SV's parameters are split across two consecutive words (see the case comments in extract_word).
+    // Field types match the reader signedness (unpacked_uint -> uint64_t, unpacked_int -> int64_t) so the
+    // aggregate below stores each value without a cast.
+    struct Raw
+    {
+        uint64_t svid;
+        int64_t  dA;
+        uint64_t e;
+        int64_t  omg, di, OMG0, OMGd, M0, af0, af1;
+        uint64_t e5b_hs, e1b_hs;
+    };
+    const Raw raw[3] = {
+        // SVID1: orbit in word 7, clock + health in word 8.
+        { bits::unpacked_uint( w7, 22, 6 ), bits::unpacked_int( w7, 28, 13 ), bits::unpacked_uint( w7, 41, 11 ), bits::unpacked_int( w7, 52, 16 ),
+          bits::unpacked_int( w7, 68, 11 ), bits::unpacked_int( w7, 79, 16 ), bits::unpacked_int( w7, 95, 11 ), bits::unpacked_int( w7, 106, 16 ),
+          bits::unpacked_int( w8, 10, 16 ), bits::unpacked_int( w8, 26, 13 ), bits::unpacked_uint( w8, 39, 2 ), bits::unpacked_uint( w8, 41, 2 ) },
+        // SVID2: orbit starts in word 8, finishes (M0 + clock) in word 9.
+        { bits::unpacked_uint( w8, 43, 6 ), bits::unpacked_int( w8, 49, 13 ), bits::unpacked_uint( w8, 62, 11 ), bits::unpacked_int( w8, 73, 16 ),
+          bits::unpacked_int( w8, 89, 11 ), bits::unpacked_int( w8, 100, 16 ), bits::unpacked_int( w8, 116, 11 ), bits::unpacked_int( w9, 22, 16 ),
+          bits::unpacked_int( w9, 38, 16 ), bits::unpacked_int( w9, 54, 13 ), bits::unpacked_uint( w9, 67, 2 ), bits::unpacked_uint( w9, 69, 2 ) },
+        // SVID3: orbit starts in word 9, finishes (OMG0 onward) in word 10.
+        { bits::unpacked_uint( w9, 71, 6 ), bits::unpacked_int( w9, 77, 13 ), bits::unpacked_uint( w9, 90, 11 ), bits::unpacked_int( w9, 101, 16 ),
+          bits::unpacked_int( w9, 112, 11 ), bits::unpacked_int( w10, 10, 16 ), bits::unpacked_int( w10, 26, 11 ), bits::unpacked_int( w10, 37, 16 ),
+          bits::unpacked_int( w10, 53, 16 ), bits::unpacked_int( w10, 69, 13 ), bits::unpacked_uint( w10, 82, 2 ), bits::unpacked_uint( w10, 84, 2 ) },
+    };
+
+    for( const Raw& x : raw )
+    {
+        if( x.svid < 1 || x.svid > 36 )
+        {
+            continue; // 0 = spare slot / out of range
+        }
+        Almanac a;
+        a.constellation = Constellation::Galileo;
+        a.prn           = static_cast<Satellite_id>( x.svid );
+        a.sqrt_a        = 5440.588203494 + x.dA * std::ldexp( 1.0, -9 ); // sqrt(29600000) + delta
+        a.e             = x.e * std::ldexp( 1.0, -16 );
+        a.i0            = ( x.di * std::ldexp( 1.0, -14 ) + 56.0 / 180.0 ) * M_PI; // 56 deg reference inclination
+        a.omega0        = x.OMG0 * std::ldexp( 1.0, -15 ) * M_PI;
+        a.omega         = x.omg * std::ldexp( 1.0, -15 ) * M_PI;
+        a.m0            = x.M0 * std::ldexp( 1.0, -15 ) * M_PI;
+        a.omegadot      = x.OMGd * std::ldexp( 1.0, -33 ) * M_PI;
+        a.af0           = x.af0 * std::ldexp( 1.0, -19 );
+        a.af1           = x.af1 * std::ldexp( 1.0, -38 );
+        a.toa           = toa;
+        a.week          = week;
+        a.health        = ( x.e5b_hs << 7 ) | ( x.e1b_hs << 1 );
+        a.valid         = true;
+
+        const size_t known_before = almanac_.size();
+        almanac_[x.svid]          = a;
+        if( almanac_.size() > known_before ) // log once per newly-known SV (re-decodes every IODa cycle)
+        {
+            logging::log(
+                logging::Level::Info,
+                fmt::format(
+                    "Navigation - {} PRN {:2d} decoded ALMANAC for PRN {:2d} (toa={:.0f} sqrtA={:.1f} e={:.2e} "
+                    "health={}); {} SVs known",
+                    params_.name, satellite_id_, x.svid, a.toa, a.sqrt_a, a.e, a.health, almanac_.size()
+                )
+            );
+        }
+    }
+    alm_decoded_ioda_ = alm_ioda_[0];
 }
 
 #ifdef ENABLE_UNIT_TESTS

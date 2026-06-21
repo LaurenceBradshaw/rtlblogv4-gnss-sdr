@@ -1,7 +1,9 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <map>
 #include <vector>
+#include "almanac.h"
 #include "ephemeris.h"
 #include "ionospheric.h"
 #include "signal.h"
@@ -57,6 +59,13 @@ public:
     {
         static const Iono dummy_iono {};
         return &dummy_iono; // TODO: no iono model in Galileo for now; revisit if that changes - currently GPS only
+    }
+
+    // Reduced almanac decoded from I/NAV word types 7-10 (coarse orbit for acquisition aiding). Keyed by PRN
+    // within Galileo; the receiver re-keys by sv_key(constellation, prn) when it aggregates.
+    const std::map<int, Almanac>& almanac() const override
+    {
+        return almanac_;
     }
 
     int get_current_bit_index() const override
@@ -116,4 +125,15 @@ private:
     Galileo_ephemeris eph_;
     int               eph_words_  = 0;
     int               eph_iodnav_ = -1;
+
+    // Reduced-almanac assembly: the 3 SVs of one almanac are spread across I/NAV word types 7,8,9,10, all
+    // sharing an IODa. Buffer each word's 128 bits + its IODa; once all four are present with a matching IODa,
+    // assemble_almanac() decodes the 3 SVs into almanac_. (Mirrors RTKLIB decode_gal_inav_alm.)
+    void store_almanac_word( int word_type, const int* jk ); // buffer a word 7-10, assemble when complete
+    void assemble_almanac();                                 // decode the 3 SVs once 7-10 share an IODa
+
+    std::array<std::array<int, 128>, 4> alm_words_ {};         // buffered bits, index 0..3 = word type 7..10
+    std::array<int, 4>                  alm_ioda_ { -1, -1, -1, -1 };
+    int                                 alm_decoded_ioda_ = -1; // last IODa already assembled (avoid re-decode)
+    std::map<int, Almanac>              almanac_;                // PRN -> coarse orbit
 };
