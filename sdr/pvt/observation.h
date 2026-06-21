@@ -84,4 +84,47 @@ private:
         Code     code         = Code::CA;  // selected component of the arc (reset on a dedup failover flip)
     };
     std::map<int, Hatch_state> hatch_; // keyed by sv_key(constellation, prn)
+
+    // Cycle-slip / observable-discontinuity detection (code-minus-carrier step). CMC = code_pr -
+    // carrier_phase_range is ~constant within one continuous carrier arc (only slow iono moves it; the integer
+    // ambiguity is a per-arc constant that cancels in the step), so an abrupt CMC step between epochs flags a
+    // discontinuity. Runs per-SV REGARDLESS of Hatch (reusable). Reseeds on lock_session change so a re-acquire
+    // is not mistaken for a slip. Single-frequency limit: catches the IMPACTFUL events (multi-cycle / loss-of-
+    // lock, exceeding code noise), not sub-metre ones - which are also low-impact.
+    //
+    // The threshold ADAPTS per SV to that signal's own ΔCMC noise. Measured RMS(ΔCMC) is ~1.7 m on GPS L1CA
+    // (BPSK) but ~3.7 m on Galileo E1 (BOC + double-estimator, ~2x noisier per epoch), so one fixed threshold
+    // cannot fit both - tight enough for GPS slips trips on BOC noise tails (~15 m peaks). So flag when
+    // |ΔCMC| > SLIP_SIGMA_K * running-σ(ΔCMC), floored. K=6 sits well above the ~3σ noise peaks of both signals
+    // (zero false triggers on the clean sim) while still catching the slips that matter, and tracks up
+    // automatically in a high-multipath (real-world) environment. NOTE: on BOC this is really an OBSERVABLE-
+    // discontinuity detector (the DE can step the code independently of the carrier) - conservative-safe for
+    // Hatch, but a pure carrier-cycle-slip signal (a tracker PLL loss-of-lock indicator) is the separate next
+    // layer, needed for PPP carrier ambiguities.
+    static constexpr double SLIP_SIGMA_K = 6.0;  // flag a step beyond this many σ of the running ΔCMC noise
+    static constexpr double SLIP_FLOOR_M = 8.0;  // ...but never below this (small slips are low-impact)
+    static constexpr double SLIP_EMA     = 0.05; // EMA weight for the running ΔCMC variance (~20-epoch window)
+    static constexpr int    SLIP_WARMUP  = 20;   // epochs to let σ settle before detecting (arc start = pull-in)
+    struct Cmc_state
+    {
+        double   prev_cmc = 0.0;
+        double   var_ema  = 0.0; // EMA of ΔCMC² -> running noise variance backing the adaptive threshold
+        uint32_t session  = 0;   // arc id (lock_session); a change reseeds (a re-acquire is not a slip)
+        int      n        = 0;   // ΔCMC samples seen this arc (0 = unprimed; also gates the warm-up)
+    };
+    std::map<int, Cmc_state> cmc_;                                               // keyed by sv_key
+    bool cmc_slip( int sv, double code_pr_m, double phase_m, uint32_t session ); // layer-1 (code-domain) detector
+
+    // Layer 2: carrier-domain cycle-slip / loss-of-lock indicator. The tracker counts carrier phase-lock breaks
+    // per arc (cos(2φ) dropping out of lock - independent of the code / double-estimator, so it catches the
+    // Costas full-cycle slips the CMC test relies on too); a rise in that count between epochs is a slip. This
+    // is the pure carrier signal PPP's ambiguities key on; Hatch ORs it with the CMC test. Reseeds on arc change.
+    struct Lockbreak_state
+    {
+        int      breaks  = 0;     // last-seen carrier_lock_breaks for this SV (this arc)
+        uint32_t session = 0;     // arc id (lock_session)
+        bool     primed  = false; // false until the first sample of an arc (which only seeds)
+    };
+    std::map<int, Lockbreak_state> lockbreak_;                           // keyed by sv_key
+    bool carrier_lock_slip( int sv, int lock_breaks, uint32_t session ); // updates lockbreak_
 };

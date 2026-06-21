@@ -251,12 +251,21 @@ void Observation_engine::generate(
         // iono-divergence bound). Start/restart the arc on the first epoch, a re-acquisition (lock_session
         // change), or a dedup component flip (code change); lock loss is already gated out (only locked SVs
         // reach here). Disabled -> the raw code pseudorange passes through untouched.
+        // Carrier-phase observable (m) + per-SV cycle-slip detection. Runs regardless of Hatch so the slip
+        // signal is reusable (future TDCP/PPP). Two complementary detectors, OR-ed: the code-domain CMC step
+        // (layer 1) and the carrier-domain phase-lock break (layer 2, the pure carrier / PPP-grade signal).
+        // Hatch adds the combined slip to its arc-reset condition below.
+        const int    sv      = sv_key( s.constellation, static_cast<int>( s.satellite_id ) );
+        const double phase_m = s.carrier_phase_range_m( rx_sample, sample_rate_hz );
+        // Evaluate both every epoch (not short-circuited) so each keeps its per-SV state current.
+        const bool cmc_break  = cmc_slip( sv, m.pseudorange_m, phase_m, s.lock_session );
+        const bool carr_break = carrier_lock_slip( sv, s.carrier_lock_breaks, s.lock_session );
+        const bool slip       = cmc_break || carr_break;
+
         if( hatch_enabled_ )
         {
-            const int    sv      = sv_key( s.constellation, static_cast<int>( s.satellite_id ) );
-            const double phase_m = s.carrier_phase_range_m( rx_sample, sample_rate_hz );
-            Hatch_state& h       = hatch_[sv];
-            if( h.n == 0 || h.session != s.lock_session || h.code != s.code )
+            Hatch_state& h = hatch_[sv];
+            if( h.n == 0 || h.session != s.lock_session || h.code != s.code || slip )
             {
                 h.pr_smooth = m.pseudorange_m; // (re)start the arc on the raw code pr
                 h.n         = 1;
@@ -286,3 +295,80 @@ void Observation_engine::adjust_master_clock_offset( double correction_s )
 {
     master_clock_offset_s_ -= correction_s;
 }
+
+namespace
+{
+// Cycle-slip decision: a code-minus-carrier STEP (dcmc) whose magnitude exceeds `threshold` once the arc is
+// warmed up (`valid`) is a slip. Pulled out as a pure function so the decision is unit-tested directly; the
+// adaptive threshold + warm-up that feed it live in cycle_slip().
+bool is_cmc_slip( double dcmc, bool valid, double threshold )
+{
+    return valid && std::abs( dcmc ) > threshold;
+}
+} // namespace
+
+bool Observation_engine::cmc_slip( int sv, double code_pr_m, double phase_m, uint32_t session )
+{
+    const double cmc = code_pr_m - phase_m; // ambiguity is a per-arc constant -> cancels in the step
+    Cmc_state&   c   = cmc_[sv];
+    if( c.n == 0 || c.session != session ) // first sample of a (new) arc: seed only, never a slip
+    {
+        c = Cmc_state { cmc, 0.0, session, 1 };
+        return false;
+    }
+    const double dcmc      = cmc - c.prev_cmc;
+    const double threshold = std::max( SLIP_SIGMA_K * std::sqrt( c.var_ema ), SLIP_FLOOR_M );
+    const bool   slip      = is_cmc_slip( dcmc, c.n >= SLIP_WARMUP, threshold );
+    if( !slip ) // a slip's outlier step must not pollute the running noise estimate
+    {
+        c.var_ema = ( 1.0 - SLIP_EMA ) * c.var_ema + SLIP_EMA * dcmc * dcmc;
+    }
+    if( slip && std::getenv( "DUMP_SLIP" ) != nullptr ) // env-gated slip log (step vs the adaptive threshold)
+    {
+        logging::log(
+            logging::Level::Info, fmt::format(
+                                      "SLIPDIAG con={} prn={} dcmc={:.2f} thresh={:.2f}", sv / 1000, sv % 1000,
+                                      dcmc, threshold
+                                  )
+        );
+    }
+    c.prev_cmc = cmc;
+    ++c.n;
+    return slip;
+}
+
+bool Observation_engine::carrier_lock_slip( int sv, int lock_breaks, uint32_t session )
+{
+    Lockbreak_state& b = lockbreak_[sv];
+    // A rise in the tracker's per-arc lock-break count since the last epoch = the carrier lost phase lock
+    // (possible slip). The count is monotonic within an arc and reset to 0 on re-acquire, so gate on the same
+    // session (a re-acquire is handled by the arc-change reset, not flagged here).
+    const bool slip = b.primed && b.session == session && lock_breaks > b.breaks;
+    if( slip && std::getenv( "DUMP_SLIP" ) != nullptr )
+    {
+        logging::log(
+            logging::Level::Info, fmt::format( "SLIPDIAG con={} prn={} carrier_break n={}", sv / 1000, sv % 1000, lock_breaks )
+        );
+    }
+    b.breaks  = lock_breaks;
+    b.session = session;
+    b.primed  = true;
+    return slip;
+}
+
+#ifdef ENABLE_UNIT_TESTS
+#include <catch2/catch_test_macros.hpp>
+
+TEST_CASE( "cmc_cycle_slip_detection", "[observation][slip]" )
+{
+    constexpr double TH = 10.0;
+    // Not yet warmed up (valid=false) -> never a slip, however large the apparent step.
+    REQUIRE_FALSE( is_cmc_slip( 1000.0, /*valid=*/false, TH ) );
+    // Steady code-minus-carrier (only noise/slow iono) within an arc -> step under threshold -> no slip.
+    REQUIRE_FALSE( is_cmc_slip( 3.0, /*valid=*/true, TH ) );
+    REQUIRE_FALSE( is_cmc_slip( -8.0, /*valid=*/true, TH ) );
+    // An abrupt CMC step beyond threshold (a multi-cycle slip) -> slip, either sign.
+    REQUIRE( is_cmc_slip( 18.0, /*valid=*/true, TH ) );
+    REQUIRE( is_cmc_slip( -20.0, /*valid=*/true, TH ) );
+}
+#endif

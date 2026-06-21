@@ -88,6 +88,12 @@ public:
                                                             // low-C/N0 field signals (RTL-SDR), flapped the
                                                             // indicator without genuine carrier loss.
     static constexpr int LOCK_FAIL_WINDOWS = 20;            // consecutive bad windows before loss of lock
+    // Carrier phase-lock break (the carrier-domain cycle-slip signal, get_carrier_lock_breaks). Hysteresis:
+    // ARM when cos(2*phi) is cleanly locked (> CARRIER_LOCK_THRESHOLD), then count a break when an armed lock
+    // falls clear out of phase lock (< this). The gap to the arm bar stops a marginal lock hovering near the
+    // threshold from flapping the count; the EMA means it fires only on a sustained loss (~2 windows), so a
+    // brief dip that the loop rides through (no real slip) is ignored - the code-minus-carrier test backs it up.
+    static constexpr double CARRIER_SLIP_COS2PHI = 0.4;
 
     // code_chips: raw +/-1 float chip values from Signal::code_chips()
     // sig: signal physics - chip rate (code NCO), code length, and RF carrier (used in
@@ -172,6 +178,11 @@ public:
     double get_prompt_q() const override
     {
         return QQ_[0];
+    }
+
+    int get_carrier_lock_breaks() const override
+    {
+        return carrier_lock_breaks_;
     }
 
     // run_loops() is the per-strategy step (Costas_tracker / Pilot_tracker); it stays pure
@@ -318,6 +329,10 @@ protected:
     bool   lock_seeded_       = false; // false until the first window seeds the smoothed estimates
     int    lock_fail_count_   = 0;     // consecutive completed windows failing the lock criteria
     bool   locked_            = false; // latched lock state returned by has_lock()
+
+    // Carrier phase-lock break counter (carrier-domain cycle-slip / LLI signal; get_carrier_lock_breaks()).
+    int    carrier_lock_breaks_ = 0;     // loss-of-lock events this arc; reset on initialise()
+    bool   carrier_phase_locked_ = false; // armed once cos(2*phi) cleanly locks; gates the next break (hysteresis)
 
     // Correlator taps. tap_offset_chips_ holds each tap's code-phase offset (code elements); n_taps_ is how
     // many are active. The tap-index meaning is set by configure_taps(): Costas uses 0=Prompt, 1=Early, 2=Late;

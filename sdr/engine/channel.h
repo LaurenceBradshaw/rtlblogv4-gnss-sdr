@@ -46,6 +46,7 @@ struct Channel_snapshot
     double       wavelength_m         = 0.0; // c / carrier frequency (constant; cached for convenience)
     double       carrier_phase_cycles = 0.0; // accumulated carrier phase (cycles) at next_sample (Hatch smoothing)
     uint32_t     lock_session         = 0;   // ++ each (re-)acquisition; Hatch resets its arc when this changes
+    int          carrier_lock_breaks  = 0;   // carrier-domain cycle-slip counter this arc (loss-of-lock events)
 
     Ephemeris eph;  // broadcast orbit/clock (base fields are all the orbit model needs)
     Iono      iono; // broadcast Klobuchar iono (iono.valid false unless this SV decoded SF4 p18)

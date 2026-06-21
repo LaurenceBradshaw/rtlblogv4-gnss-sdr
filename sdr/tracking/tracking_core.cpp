@@ -107,6 +107,9 @@ void Tracking_core::initialise( const Acquisition_result& acq )
     lock_fail_count_   = 0;
     locked_            = false;
 
+    carrier_lock_breaks_  = 0; // new lock arc - the carrier-slip counter restarts (re-acquire is not a slip)
+    carrier_phase_locked_ = false;
+
     secondary_sync_     = false;
     secondary_index_    = 0;
     secondary_polarity_ = 1;
@@ -385,6 +388,24 @@ double carrier_lock_cos2phi( double nbd_sum, double nbp_sum )
 {
     return ( nbp_sum > 0.0 ) ? nbd_sum / nbp_sum : 0.0;
 }
+
+// Carrier phase-lock break decision (the carrier-domain cycle-slip / LLI signal). Hysteresis: ARM once the
+// smoothed cos(2*phi) is cleanly locked (> arm), then report a break - and disarm - when an armed lock falls
+// clear out of phase lock (< fire). The arm/fire gap stops a marginal lock near the bar from flapping the
+// count; `armed` is the caller-held latch (one per channel). Pulled out as a pure function so it is unit-tested.
+bool carrier_lock_break( double cos2phi, double arm, double fire, bool& armed )
+{
+    if( cos2phi > arm )
+    {
+        armed = true;
+    }
+    else if( armed && cos2phi < fire )
+    {
+        armed = false;
+        return true;
+    }
+    return false;
+}
 } // namespace
 
 // update_lock_detectors
@@ -426,6 +447,13 @@ void Tracking_core::update_lock_detectors( double prompt_i, double prompt_q )
     {
         cn0_db_hz_         = 0.7 * cn0_db_hz_ + 0.3 * cn0;
         carrier_lock_test_ = 0.7 * carrier_lock_test_ + 0.3 * lock_test;
+    }
+
+    // Carrier phase-lock break (carrier-domain cycle-slip / LLI). Arm once cleanly phase-locked, then count a
+    // break when an armed lock falls clear out of phase lock; the arm/fire gap gives hysteresis (see header).
+    if( carrier_lock_break( carrier_lock_test_, CARRIER_LOCK_THRESHOLD, CARRIER_SLIP_COS2PHI, carrier_phase_locked_ ) )
+    {
+        ++carrier_lock_breaks_;
     }
 
     // Hysteretic lock decision.
@@ -787,5 +815,27 @@ TEST_CASE( "carrier_lock_cos2phi_matches_phase", "[tracking][lock]" )
         REQUIRE( carrier_lock_cos2phi( nbd, nbp ) == Catch::Approx( std::cos( 2.0 * phi ) ).margin( 1e-12 ) );
     }
     REQUIRE( carrier_lock_cos2phi( 0.0, 0.0 ) == 0.0 ); // guarded: no power -> 0
+}
+
+TEST_CASE( "carrier_lock_break_hysteresis", "[tracking][lock][slip]" )
+{
+    constexpr double ARM = 0.7, FIRE = 0.4;
+    bool             armed = false;
+    // Must ARM (cleanly lock) before any break can be reported - a low start alone is not a slip.
+    REQUIRE_FALSE( carrier_lock_break( 0.2, ARM, FIRE, armed ) );
+    REQUIRE_FALSE( armed );
+    REQUIRE_FALSE( carrier_lock_break( 0.85, ARM, FIRE, armed ) ); // clean lock -> arm, no break
+    REQUIRE( armed );
+    // A dip into the dead band (between fire and arm) is NOT a break - hysteresis ignores marginal flapping.
+    REQUIRE_FALSE( carrier_lock_break( 0.55, ARM, FIRE, armed ) );
+    REQUIRE( armed );
+    // Falling clear out of phase lock -> exactly one break, and it disarms.
+    REQUIRE( carrier_lock_break( 0.1, ARM, FIRE, armed ) );
+    REQUIRE_FALSE( armed );
+    // Staying low does not re-fire while disarmed (one event per loss, not per epoch).
+    REQUIRE_FALSE( carrier_lock_break( 0.1, ARM, FIRE, armed ) );
+    // Re-locking re-arms; a second clean loss reports a second break.
+    REQUIRE_FALSE( carrier_lock_break( 0.9, ARM, FIRE, armed ) );
+    REQUIRE( carrier_lock_break( 0.0, ARM, FIRE, armed ) );
 }
 #endif

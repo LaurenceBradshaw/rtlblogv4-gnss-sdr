@@ -69,4 +69,14 @@ public:
     // Raw prompt correlator output this epoch (the I/Q constellation point). For history/graphs.
     virtual double get_prompt_i() const = 0;
     virtual double get_prompt_q() const = 0;
+
+    // Count of carrier phase-lock breaks (loss-of-lock events) within the CURRENT lock arc - the carrier-domain
+    // cycle-slip / loss-of-lock indicator. Increments each time the carrier lock test cos(2phi) drops clear out
+    // of phase lock; resets to 0 on (re-)acquisition. An increase between observation epochs means the carrier
+    // phase tracking was disrupted, so the integer-cycle ambiguity may have jumped - unlike
+    // get_carrier_phase_cycles(), which is continuous by construction. Independent of the code / double-
+    // estimator, so this is the slip signal PPP's carrier-phase ambiguities need (the code-minus-carrier test
+    // in Observation_engine is the complementary code-domain one, which also catches Costas full-cycle slips
+    // the discriminator is blind to).
+    virtual int get_carrier_lock_breaks() const = 0;
 };

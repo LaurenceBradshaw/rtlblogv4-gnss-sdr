@@ -156,6 +156,7 @@ void Channel::publish_snapshot()
     s.carrier_acceleration = tracking_->get_carrier_acceleration();
     s.carrier_phase_cycles = tracking_->get_carrier_phase_cycles();
     s.lock_session         = track_session_;
+    s.carrier_lock_breaks  = tracking_->get_carrier_lock_breaks();
     s.state                = state_;
     s.has_lock             = ( state_ == Channel_state::TRACKING ) && tracking_->has_lock();
     // Live tracking C/N0 (M2M4) once it has a window; fall back to the acquisition C/N0 until then.
