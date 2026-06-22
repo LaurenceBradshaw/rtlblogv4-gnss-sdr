@@ -4,10 +4,9 @@
 #include <stdexcept>
 #include "logging.h"
 
-// Recording dumps the raw in-memory sample layout; the file is only replayable as float32 if that holds.
-static_assert( sizeof( Complex_sample ) == 2 * sizeof( float ), "Complex_sample must be interleaved float32 I/Q" );
-
-Iq_recorder::Iq_recorder( const std::string& path ) : out_( path, std::ios::binary | std::ios::trunc )
+Iq_recorder::Iq_recorder( const std::string& path, Iq_sample_format format )
+    : out_( path, std::ios::binary | std::ios::trunc ),
+      format_( format )
 {
     if( !out_ )
     {
@@ -43,16 +42,16 @@ void Iq_recorder::record( const Complex_buf& samples )
     {
         return;
     }
-    const size_t bytes = samples.size() * sizeof( Complex_sample );
+    std::vector<uint8_t> block = encode_iq( samples, format_ ); // float -> on-disk format (off the writer thread)
     {
         std::lock_guard<std::mutex> lock( mtx_ );
-        if( queued_bytes_ + bytes > MAX_QUEUE_BYTES )
+        if( queued_bytes_ + block.size() > MAX_QUEUE_BYTES )
         {
             ++dropped_blocks_; // bounded: degrade the recording, never block the live pipeline
             return;
         }
-        queue_.push_back( samples ); // copy: the writer thread outlives this call
-        queued_bytes_ += bytes;
+        queued_bytes_ += block.size();
+        queue_.push_back( std::move( block ) );
     }
     cv_.notify_one();
 }
@@ -90,7 +89,7 @@ void Iq_recorder::writer_loop()
 {
     for( ;; )
     {
-        Complex_buf block;
+        std::vector<uint8_t> block;
         {
             std::unique_lock<std::mutex> lock( mtx_ );
             cv_.wait( lock, [this] { return stop_ || !queue_.empty(); } );
@@ -100,12 +99,9 @@ void Iq_recorder::writer_loop()
             }
             block = std::move( queue_.front() );
             queue_.pop_front();
-            queued_bytes_ -= block.size() * sizeof( Complex_sample );
+            queued_bytes_ -= block.size();
         }
-        out_.write(
-            reinterpret_cast<const char*>( block.data() ),
-            static_cast<std::streamsize>( block.size() * sizeof( Complex_sample ) )
-        );
+        out_.write( reinterpret_cast<const char*>( block.data() ), static_cast<std::streamsize>( block.size() ) );
     }
 }
 

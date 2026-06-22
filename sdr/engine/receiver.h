@@ -11,7 +11,7 @@
 #include "signal_aiding.h"
 #include "channel.h"
 #include "fir_decimator.h"
-#include "iq_file_device.h" // Iq_sample_format
+#include "iq_format.h" // Iq_sample_format (for the config structs)
 #include "observation.h"
 #include "position.h"
 #include "signal_selection.h" // Signal_id
@@ -42,11 +42,14 @@ struct Receiver_config
     // Observation_engine::HATCH_WINDOW; this just enables/disables the smoothing.
     bool hatch_enabled = true;
 
-    // Record the processed (post-decimation) IQ stream to this file as float32, ALONGSIDE normal processing
-    // (a passive tap - does not change the live behaviour). Empty = no recording. Replay the file with
-    // --format float32 --sample-rate <processing rate>. With --decimate this records the decimated stream
-    // (a decimation pre-process); with no decimation it records the raw source (e.g. a long RTL-SDR capture).
+    // Record the processed (post-decimation) IQ stream to this file, ALONGSIDE normal processing (a passive
+    // tap - does not change the live behaviour). Empty = no recording. With --decimate this records the
+    // decimated stream (a decimation pre-process); with no decimation, the raw source (e.g. a long RTL-SDR
+    // capture). Replay with --format <record_format> --sample-rate <processing rate>.
     std::string record_path;
+    // On-disk format for the recording. nullopt = auto: the input format for a file source, INT8 (the
+    // RTL-SDR's native depth) for a live source. A set value overrides. Resolved in setup().
+    std::optional<Iq_sample_format> record_format;
 
     // Which signals to search, each with its own PRN allowlist (empty set = all PRNs in that signal's
     // range). Empty list -> default_signal_selection() (GPS L1 C/A + Galileo E1-B, all PRNs).
@@ -68,6 +71,7 @@ struct Source_params
     uint32_t         decimation     = 1;       // FIR-decimate the source by this factor (1 = none)
     bool             hatch_enabled  = true;    // Hatch carrier-smoothing of the code pseudorange (on/off)
     std::string      record_path;              // record processed IQ to this file (empty = off); see Receiver_config
+    std::optional<Iq_sample_format> record_format; // on-disk record format; nullopt = auto (see Receiver_config)
 };
 
 // Timing/progress of the processing loop, published for the GUI status bar. exec = wall-clock since

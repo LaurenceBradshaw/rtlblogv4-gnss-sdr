@@ -3,16 +3,8 @@
 #include <atomic>
 #include <fstream>
 #include <thread>
+#include "iq_format.h" // Iq_sample_format + the sample-format codec
 #include "stream_device.h"
-
-enum class Iq_sample_format
-{
-    UINT8,
-    INT8,
-    UINT16,
-    INT16,
-    FLOAT32,
-};
 
 class Iq_file_device : public Stream_device
 {

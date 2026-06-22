@@ -50,9 +50,12 @@ int main( int argc, char** argv )
           cxxopts::value<uint32_t>()->default_value( "1" ) )
         ( "hatch",       "Hatch carrier-smooth the code pseudorange (lower noise). --hatch=false to disable",
           cxxopts::value<bool>()->default_value( "true" ) )
-        ( "record",      "Also record the processed (post-decimation) IQ to this file as float32, alongside "
-                         "normal processing. Replay with --format float32 --sample-rate <processing rate>. "
+        ( "record",      "Also record the processed (post-decimation) IQ to this file, alongside normal "
+                         "processing. Replay with --format <record-format> --sample-rate <processing rate>. "
                          "With --decimate it records the decimated stream (decimation pre-process)",
+          cxxopts::value<std::string>() )
+        ( "record-format", "On-disk format for --record: uint8 int8 uint16 int16 float32. Default: the input "
+                         "--format for a file source, int8 for RTL-SDR",
           cxxopts::value<std::string>() )
         ( "signal",      "Signal to search, repeatable: CONSTELLATION[:COMPONENT], where "
                          "CONSTELLATION=gps|galileo|beidou and COMPONENT=l1ca|l1c|e1|b1i. Omit the component "
@@ -85,6 +88,10 @@ int main( int argc, char** argv )
     if( result.count( "record" ) )
     {
         config.record_path = with_iq_extension( result["record"].as<std::string>() ); // default .f32 if no ext
+    }
+    if( result.count( "record-format" ) ) // else nullopt -> auto (input format / int8) resolved in setup()
+    {
+        config.record_format = parse_iq_format( result["record-format"].as<std::string>() );
     }
 
     // The GUI's Source tab supplies the file / source params, so --file is optional under --gui.

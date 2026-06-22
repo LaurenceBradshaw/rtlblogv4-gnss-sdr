@@ -5,6 +5,7 @@
 #include <thread>
 #include "constants.h"
 #include "geodesy.h"
+#include "iq_file_device.h" // constructs Iq_file_device for a file source
 #include "iq_recorder.h"
 #include "logging.h"
 #include "orbit.h"
@@ -125,6 +126,7 @@ void Receiver::set_source_params( Source_params params )
     config_.decimation     = std::max( 1u, params.decimation );
     config_.hatch_enabled  = params.hatch_enabled;
     config_.record_path    = std::move( params.record_path );
+    config_.record_format  = params.record_format;
 }
 
 Receiver::~Receiver() = default;
@@ -161,20 +163,18 @@ void Receiver::setup()
     recorder_.reset();
     if( !config_.record_path.empty() )
     {
-        recorder_ = std::make_unique<Iq_recorder>( config_.record_path );
+        // Resolve the record format: explicit if set, else auto = the input format for a file source, INT8
+        // (the RTL-SDR's native 8-bit depth) for a live source.
+        const Iq_sample_format rec_fmt =
+            config_.record_format.value_or( config_.use_rtlsdr ? Iq_sample_format::INT8 : config_.format );
+        recorder_ = std::make_unique<Iq_recorder>( config_.record_path, rec_fmt );
         logging::log(
             logging::Level::Info,
             fmt::format(
-                "Recording IQ -> {} (float32 I/Q at {} Hz); replay with --format float32 --sample-rate {}",
-                config_.record_path, sample_rate_hz, sample_rate_hz
+                "Recording IQ -> {} ({} at {} Hz); replay with --format {} --sample-rate {}",
+                config_.record_path, iq_format_name( rec_fmt ), sample_rate_hz, iq_format_name( rec_fmt ), sample_rate_hz
             )
         );
-        if( !config_.use_rtlsdr && decim == 1 )
-        {
-            logging::log(
-                logging::Level::Info, "  (file source, no decimation: this just re-encodes the input as float32)"
-            );
-        }
     }
 
     // Source: live RTL-SDR or recorded file, behind the Stream_device interface.

@@ -131,6 +131,18 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     record_row->addWidget( record_path_ );
     record_row->addWidget( record_browse_ );
     common->addRow( QStringLiteral( "Output file:" ), record_row );
+    // On-disk record format: the same formats as the file-source dropdown. The GUI always picks a concrete one
+    // (the auto "match source" default is a CLI-only convenience, since the dropdown is always present here);
+    // default to int8 (compact, the RTL-SDR's native depth) unless the config already specifies one.
+    record_format_ = new QComboBox( this );
+    for( const Format_option& f : FORMATS )
+    {
+        record_format_->addItem( QString::fromUtf8( f.label ), static_cast<int>( f.value ) );
+    }
+    record_format_->setCurrentIndex(
+        record_format_->findData( static_cast<int>( cfg.record_format.value_or( Iq_sample_format::INT8 ) ) )
+    );
+    common->addRow( QStringLiteral( "Record format:" ), record_format_ );
     root->addLayout( common );
 
     status_ = new QLabel( this );
@@ -263,6 +275,7 @@ void Source_widget::update_record_enabled()
     const bool on = record_->isChecked();
     record_path_->setEnabled( on );
     record_browse_->setEnabled( on );
+    record_format_->setEnabled( on );
 }
 
 void Source_widget::normalize_record_path_display()
@@ -292,6 +305,8 @@ Source_params Source_widget::source_params() const
     p.hatch_enabled  = hatch_->isChecked();
     p.record_path =
         record_->isChecked() ? with_iq_extension( record_path_->text().trimmed().toStdString() ) : std::string();
+    // The GUI always specifies a concrete format (no "auto" - that is a CLI-only default).
+    p.record_format = static_cast<Iq_sample_format>( record_format_->currentData().toInt() );
     return p;
 }
 
@@ -353,10 +368,11 @@ void Source_widget::set_editable( bool on )
     record_->setEnabled( on );
     record_path_->setEnabled( on );
     record_browse_->setEnabled( on );
+    record_format_->setEnabled( on );
     if( on )
     {
         update_gain_enabled();   // restore the AGC-driven gain enable state
-        update_record_enabled(); // restore the record-checkbox-driven path/browse state
+        update_record_enabled(); // restore the record-checkbox-driven path/browse/format state
     }
 }
 

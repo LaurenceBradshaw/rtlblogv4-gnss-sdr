@@ -62,9 +62,10 @@ private:
     QSpinBox*       decimation_   = nullptr; // FIR decimation factor; both sources
     QLabel*         effective_rate_ = nullptr; // live "processing rate after decimation" read-out
     QCheckBox*      hatch_        = nullptr; // Hatch carrier-smoothing of the code pseudorange (on/off)
-    QCheckBox*      record_       = nullptr; // record processed IQ to a file (on/off)
-    QLineEdit*      record_path_  = nullptr; // output path for the recording
+    QCheckBox*      record_        = nullptr; // record processed IQ to a file (on/off)
+    QLineEdit*      record_path_   = nullptr; // output path for the recording
     QPushButton*    record_browse_ = nullptr; // pick the record output path
+    QComboBox*      record_format_ = nullptr; // on-disk format for the recording ("Auto" = match source)
     QSpinBox*       device_index_ = nullptr;
     QDoubleSpinBox* gain_         = nullptr;
     QCheckBox*      agc_          = nullptr; // hardware AGC -> gain_db < 0
