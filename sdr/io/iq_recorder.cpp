@@ -56,33 +56,75 @@ void Iq_recorder::record( const Complex_buf& samples )
     cv_.notify_one();
 }
 
-std::string with_iq_extension( const std::string& path )
+namespace
+{
+// The format-tagging extensions (with dot), one per Iq_sample_format - see iq_format_extension.
+const char* const MANAGED_EXTS[] = { ".f32", ".i8", ".ui8", ".i16", ".ui16" };
+
+bool ends_with_ci( const std::string& s, const char* suffix )
+{
+    const size_t n = std::strlen( suffix );
+    if( s.size() < n )
+    {
+        return false;
+    }
+    for( size_t i = 0; i < n; ++i )
+    {
+        if( std::tolower( static_cast<unsigned char>( s[s.size() - n + i] ) ) != suffix[i] )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Length (incl. dot) of a trailing managed extension, or 0 if none.
+size_t managed_ext_len( const std::string& s )
+{
+    for( const char* ext : MANAGED_EXTS )
+    {
+        if( ends_with_ci( s, ext ) )
+        {
+            return std::strlen( ext );
+        }
+    }
+    return 0;
+}
+
+// True if the final path component has any '.'-extension at all.
+bool has_extension( const std::string& s )
+{
+    const size_t slash = s.find_last_of( "/\\" );
+    const size_t dot   = s.find_last_of( '.' );
+    return dot != std::string::npos && ( slash == std::string::npos || dot > slash ) && dot + 1 < s.size();
+}
+} // namespace
+
+std::string with_iq_extension( const std::string& path, Iq_sample_format format )
 {
     if( path.empty() )
     {
         return path; // empty = no recording; leave it
     }
-    const auto ends_with = [&]( const char* ext )
+    const std::string want = std::string( "." ) + iq_format_extension( format );
+    if( const size_t n = managed_ext_len( path ) )
     {
-        const size_t n = std::strlen( ext );
-        if( path.size() < n )
-        {
-            return false;
-        }
-        for( size_t i = 0; i < n; ++i )
-        {
-            if( std::tolower( static_cast<unsigned char>( path[path.size() - n + i] ) ) != ext[i] )
-            {
-                return false;
-            }
-        }
-        return true;
-    };
-    if( ends_with( ".f32" ) || ends_with( ".iq" ) )
-    {
-        return path;
+        return path.substr( 0, path.size() - n ) + want; // managed extension -> retag to this format
     }
-    return path + ".f32";
+    if( has_extension( path ) )
+    {
+        return path; // a deliberate custom extension -> leave it
+    }
+    return path + want; // no extension -> append the format's
+}
+
+std::string swap_iq_extension( const std::string& path, Iq_sample_format format )
+{
+    if( const size_t n = managed_ext_len( path ) )
+    {
+        return path.substr( 0, path.size() - n ) + "." + iq_format_extension( format );
+    }
+    return path; // not a managed extension (custom, or none) -> leave it
 }
 
 void Iq_recorder::writer_loop()
@@ -108,15 +150,25 @@ void Iq_recorder::writer_loop()
 #ifdef ENABLE_UNIT_TESTS
 #include <catch2/catch_test_macros.hpp>
 
-TEST_CASE( "with_iq_extension_defaults_and_preserves", "[io][record]" )
+TEST_CASE( "with_iq_extension_tags_by_format", "[io][record]" )
 {
-    REQUIRE( with_iq_extension( "" ) == "" );                       // empty stays empty (= no recording)
-    REQUIRE( with_iq_extension( "capture" ) == "capture.f32" );     // no extension -> default .f32
-    REQUIRE( with_iq_extension( "/tmp/run1" ) == "/tmp/run1.f32" );
-    REQUIRE( with_iq_extension( "my.capture" ) == "my.capture.f32" ); // a dot that isn't a known ext
-    REQUIRE( with_iq_extension( "x.f32" ) == "x.f32" );            // known extensions preserved
-    REQUIRE( with_iq_extension( "x.iq" ) == "x.iq" );
-    REQUIRE( with_iq_extension( "X.F32" ) == "X.F32" );            // case-insensitive
-    REQUIRE( with_iq_extension( "data.IQ" ) == "data.IQ" );
+    using F = Iq_sample_format;
+    REQUIRE( with_iq_extension( "", F::INT8 ) == "" );                      // empty stays empty (= no recording)
+    REQUIRE( with_iq_extension( "capture", F::INT8 ) == "capture.i8" );     // no extension -> append the format's
+    REQUIRE( with_iq_extension( "/tmp/run1", F::UINT8 ) == "/tmp/run1.ui8" );
+    REQUIRE( with_iq_extension( "capture.f32", F::INT8 ) == "capture.i8" ); // managed extension -> retag to format
+    REQUIRE( with_iq_extension( "x.ui8", F::FLOAT32 ) == "x.f32" );
+    REQUIRE( with_iq_extension( "X.I16", F::UINT16 ) == "X.ui16" );         // retag is case-insensitive
+    REQUIRE( with_iq_extension( "cap.dat", F::INT8 ) == "cap.dat" );        // custom extension -> left alone
+    REQUIRE( with_iq_extension( "my.capture", F::INT8 ) == "my.capture" );  // .capture is custom -> left
+}
+
+TEST_CASE( "swap_iq_extension_soft_forces_managed_only", "[io][record]" )
+{
+    using F = Iq_sample_format;
+    REQUIRE( swap_iq_extension( "cap.i8", F::UINT8 ) == "cap.ui8" );  // managed -> retag
+    REQUIRE( swap_iq_extension( "cap.f32", F::INT16 ) == "cap.i16" );
+    REQUIRE( swap_iq_extension( "cap", F::UINT8 ) == "cap" );         // no extension -> leave (soft force only)
+    REQUIRE( swap_iq_extension( "cap.dat", F::UINT8 ) == "cap.dat" ); // custom -> leave
 }
 #endif

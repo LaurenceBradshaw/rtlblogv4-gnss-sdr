@@ -1,7 +1,6 @@
 #include <cxxopts.hpp>
 #include <iostream>
 #include <string>
-#include "iq_recorder.h" // with_iq_extension
 #include "logging.h"
 #include "receiver.h"
 #include "signal_selection.h"
@@ -90,7 +89,7 @@ int main( int argc, char** argv )
     config.hatch_enabled  = result["hatch"].as<bool>();
     if( result.count( "record" ) )
     {
-        config.record_path = with_iq_extension( result["record"].as<std::string>() ); // default .f32 if no ext
+        config.record_path = result["record"].as<std::string>(); // format extension applied in setup()
     }
     if( result.count( "record-format" ) ) // else nullopt -> auto (input format / int8) resolved in setup()
     {

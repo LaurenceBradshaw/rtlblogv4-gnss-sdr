@@ -48,7 +48,13 @@ private:
     static constexpr size_t MAX_QUEUE_BYTES = 256u * 1024 * 1024; // bound so a slow disk never grows RAM unbounded
 };
 
-// Ensure an IQ-recording path ends in a known extension - .f32 or .iq (case-insensitive) - defaulting to .f32
-// if it has neither. Empty stays empty. Shared by the CLI and the GUI so a recording always has a clear,
-// replayable extension. (The actual sample format is chosen separately - see Iq_recorder / record_format.)
-std::string with_iq_extension( const std::string& path );
+// Give a recording path an extension that reflects its sample format (f32/i8/ui8/i16/ui16 - see
+// iq_format_extension), so the file name makes the format obvious. A trailing managed extension is RETAGGED to
+// `format`'s; a path with NO extension gets it appended; a path with a custom extension is left alone. Empty
+// stays empty. (Shared by the CLI default + the GUI.)
+std::string with_iq_extension( const std::string& path, Iq_sample_format format );
+
+// "Soft force" for a format change: ONLY retag a path whose current extension is a managed one (f32/i8/...) to
+// `format`'s; anything else (custom extension, or none) is left unchanged. Used when the GUI format dropdown
+// changes so an auto-tagged name follows the format, but a deliberate custom name is respected.
+std::string swap_iq_extension( const std::string& path, Iq_sample_format format );

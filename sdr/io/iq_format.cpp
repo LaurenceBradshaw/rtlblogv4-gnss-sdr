@@ -91,6 +91,24 @@ const char* iq_format_name( Iq_sample_format format )
     return "?";
 }
 
+const char* iq_format_extension( Iq_sample_format format )
+{
+    switch( format )
+    {
+    case Iq_sample_format::UINT8:
+        return "ui8";
+    case Iq_sample_format::INT8:
+        return "i8";
+    case Iq_sample_format::UINT16:
+        return "ui16";
+    case Iq_sample_format::INT16:
+        return "i16";
+    case Iq_sample_format::FLOAT32:
+        return "f32";
+    }
+    return "iq";
+}
+
 void decode_iq( const unsigned char* buf, size_t len, Iq_sample_format format, Complex_buf& output )
 {
     const size_t bps       = static_cast<size_t>( bytes_per_iq_sample( format ) );

@@ -21,6 +21,10 @@ int bytes_per_iq_sample( Iq_sample_format format );
 // The CLI/--format token for a format ("uint8" / "int8" / "uint16" / "int16" / "float32").
 const char* iq_format_name( Iq_sample_format format );
 
+// The recording file extension (without dot) for a format: f32 / i8 / ui8 / i16 / ui16. Chosen so a recorded
+// file's name makes its sample format obvious.
+const char* iq_format_extension( Iq_sample_format format );
+
 // Decode `len` bytes of packed samples in `format` -> float [-1,1] I/Q. `output` must be pre-sized to the
 // sample count (len / bytes_per_iq_sample). MSB-first integers are normalised to [-1,1]; float32 passes through.
 void decode_iq( const unsigned char* buf, size_t len, Iq_sample_format format, Complex_buf& output );

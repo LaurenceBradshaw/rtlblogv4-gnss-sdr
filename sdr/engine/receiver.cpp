@@ -168,12 +168,13 @@ void Receiver::setup()
         // (the RTL-SDR's native 8-bit depth) for a live source.
         const Iq_sample_format rec_fmt =
             config_.record_format.value_or( config_.use_rtlsdr ? Iq_sample_format::INT8 : config_.format );
-        recorder_ = std::make_unique<Iq_recorder>( config_.record_path, rec_fmt );
+        const std::string rec_path = with_iq_extension( config_.record_path, rec_fmt ); // tag the file by format
+        recorder_                  = std::make_unique<Iq_recorder>( rec_path, rec_fmt );
         logging::log(
             logging::Level::Info,
             fmt::format(
                 "Recording IQ -> {} ({} at {} Hz); replay with --format {} --sample-rate {}",
-                config_.record_path, iq_format_name( rec_fmt ), sample_rate_hz, iq_format_name( rec_fmt ), sample_rate_hz
+                rec_path, iq_format_name( rec_fmt ), sample_rate_hz, iq_format_name( rec_fmt ), sample_rate_hz
             )
         );
     }

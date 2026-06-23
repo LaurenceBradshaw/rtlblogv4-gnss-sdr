@@ -131,7 +131,7 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     ) );
     common->addRow( QStringLiteral( "Recording:" ), record_ );
     record_path_ = new QLineEdit( QString::fromStdString( cfg.record_path ), this );
-    record_path_->setPlaceholderText( QStringLiteral( "output .f32 path" ) );
+    record_path_->setPlaceholderText( QStringLiteral( "output path (extension set from format)" ) );
     record_browse_   = new QPushButton( QStringLiteral( "Browse..." ), this );
     auto* record_row = new QHBoxLayout;
     record_row->addWidget( record_path_ );
@@ -171,7 +171,7 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
                 this,
                 QStringLiteral( "Choose IQ file" ),
                 file_path_->text(),
-                QStringLiteral( "IQ data (*.iq *.dat *.bin *.f32);;All files (*)" )
+                QStringLiteral( "IQ data (*.f32 *.i8 *.ui8 *.i16 *.ui16 *.dat *.bin);;All files (*)" )
             );
             if( !f.isEmpty() )
             {
@@ -213,11 +213,12 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
                 this,
                 QStringLiteral( "Record IQ to" ),
                 record_path_->text(),
-                QStringLiteral( "Float32 IQ (*.f32 *.iq);;All files (*)" )
+                QStringLiteral( "IQ data (*.f32 *.i8 *.ui8 *.i16 *.ui16);;All files (*)" )
             );
             if( !f.isEmpty() )
             {
-                record_path_->setText( QString::fromStdString( with_iq_extension( f.toStdString() ) ) );
+                const auto fmt = static_cast<Iq_sample_format>( record_format_->currentData().toInt() );
+                record_path_->setText( QString::fromStdString( with_iq_extension( f.toStdString(), fmt ) ) );
                 validate();
             }
         }
@@ -231,9 +232,26 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
             update_record_enabled();
             if( record_->isChecked() )
             {
-                normalize_record_path_display(); // show the .f32/.iq extension once recording is enabled
+                normalize_record_path_display(); // show the format extension once recording is enabled
             }
             validate();
+        }
+    );
+    // Soft-force the extension to follow the format: a managed extension (f32/i8/ui8/...) is retagged when the
+    // format dropdown changes; a custom/absent extension is left alone (see swap_iq_extension).
+    connect(
+        record_format_,
+        qOverload<int>( &QComboBox::currentIndexChanged ),
+        this,
+        [this]( int )
+        {
+            const QString cur = record_path_->text().trimmed();
+            if( cur.isEmpty() )
+            {
+                return;
+            }
+            const auto fmt = static_cast<Iq_sample_format>( record_format_->currentData().toInt() );
+            record_path_->setText( QString::fromStdString( swap_iq_extension( cur.toStdString(), fmt ) ) );
         }
     );
     connect( record_path_, &QLineEdit::textChanged, this, [this]( const QString& ) { validate(); } );
@@ -291,7 +309,8 @@ void Source_widget::normalize_record_path_display()
     {
         return;
     }
-    const QString fixed = QString::fromStdString( with_iq_extension( cur.toStdString() ) );
+    const auto    fmt   = static_cast<Iq_sample_format>( record_format_->currentData().toInt() );
+    const QString fixed = QString::fromStdString( with_iq_extension( cur.toStdString(), fmt ) );
     if( fixed != record_path_->text() )
     {
         record_path_->setText( fixed ); // reflect the applied extension in the field
@@ -310,10 +329,11 @@ Source_params Source_widget::source_params() const
     p.bias_tee       = bias_tee_->isChecked();
     p.decimation     = static_cast<uint32_t>( decimation_->value() );
     p.hatch_enabled  = hatch_->isChecked();
-    p.record_path =
-        record_->isChecked() ? with_iq_extension( record_path_->text().trimmed().toStdString() ) : std::string();
     // The GUI always specifies a concrete format (no "auto" - that is a CLI-only default).
     p.record_format = static_cast<Iq_sample_format>( record_format_->currentData().toInt() );
+    p.record_path   = record_->isChecked()
+                        ? with_iq_extension( record_path_->text().trimmed().toStdString(), *p.record_format )
+                        : std::string();
     return p;
 }
 
