@@ -35,6 +35,7 @@ public:
     void set_sample_rate_hz( uint32_t rate_hz ) override;
     void set_gain_tenths_db( int gain_tenths_db ) override;
     void set_agc( bool enable ) override;
+    void set_bias_tee( bool enable ) override; // power an active antenna's LNA (rtlsdr_set_bias_tee)
 
     // Read back what the hardware ACTUALLY settled on (the device rounds rate/freq/gain to discrete
     // values) - used to log/verify the requested config really reached the device.

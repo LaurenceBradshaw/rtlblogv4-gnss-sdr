@@ -33,6 +33,7 @@ struct Receiver_config
     Iq_sample_format format         = Iq_sample_format::INT16; // file source
     int              device_index   = 0;                       // RTL-SDR
     double           gain_db        = -1.0;                    // RTL-SDR; <0 => hardware AGC
+    bool             bias_tee       = false;                   // RTL-SDR: power an active antenna's LNA (DC up the coax)
     // FIR-decimate the source by this integer factor before processing (1 = none). The whole pipeline
     // then runs at sample_rate_hz / decimation - cheaper, and lets a high-rate capture (e.g. 25 MHz)
     // run near real time. The fractional rate that an indivisible factor leaves is harmless.
@@ -68,6 +69,7 @@ struct Source_params
     uint32_t         sample_rate_hz = 2048000; // SOURCE (native) rate
     int              device_index   = 0;       // RTL-SDR
     double           gain_db        = -1.0;    // RTL-SDR; <0 => hardware AGC
+    bool             bias_tee       = false;   // RTL-SDR: power an active antenna's LNA (DC up the coax)
     uint32_t         decimation     = 1;       // FIR-decimate the source by this factor (1 = none)
     bool             hatch_enabled  = true;    // Hatch carrier-smoothing of the code pseudorange (on/off)
     std::string      record_path;              // record processed IQ to this file (empty = off); see Receiver_config

@@ -94,6 +94,12 @@ Source_widget::Source_widget( const Receiver& receiver, QWidget* parent )
     gain_row->addWidget( gain_ );
     gain_row->addWidget( agc_ );
     rtl_form->addRow( QStringLiteral( "Gain:" ), gain_row );
+    bias_tee_ = new QCheckBox( QStringLiteral( "Bias-tee (power active antenna)" ), rtlsdr_group_ );
+    bias_tee_->setChecked( cfg.bias_tee );
+    bias_tee_->setToolTip( QStringLiteral(
+        "Feed DC up the coax to power an active antenna's LNA (most GPS antennas need this). Off by default - "
+        "it puts DC on the antenna port, so enable it only with an active antenna." ) );
+    rtl_form->addRow( QString(), bias_tee_ );
     root->addWidget( rtlsdr_group_ );
 
     // --- common: native sample rate + decimation ---
@@ -301,6 +307,7 @@ Source_params Source_widget::source_params() const
     p.sample_rate_hz = sample_rate_->text().trimmed().toUInt(); // validate() guarantees this parses > 0
     p.device_index   = device_index_->value();
     p.gain_db        = agc_->isChecked() ? -1.0 : gain_->value();
+    p.bias_tee       = bias_tee_->isChecked();
     p.decimation     = static_cast<uint32_t>( decimation_->value() );
     p.hatch_enabled  = hatch_->isChecked();
     p.record_path =

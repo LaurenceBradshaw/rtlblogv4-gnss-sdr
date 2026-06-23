@@ -62,6 +62,16 @@ void Rtlsdr_device::set_agc( bool enable )
     rtlsdr_set_agc_mode( dev, enable ? 1 : 0 );
 }
 
+void Rtlsdr_device::set_bias_tee( bool enable )
+{
+    // Powers an active antenna's LNA over the coax (equivalent to `rtl_biast -b 1`). A failure is not fatal -
+    // some devices/drivers lack the bias-tee; warn and carry on so a passive-antenna setup still runs.
+    if( rtlsdr_set_bias_tee( reinterpret_cast<rtlsdr_dev_t*>( dev_ ), enable ? 1 : 0 ) != 0 )
+    {
+        logging::log( logging::Level::Warning, "Failed to set RTL-SDR bias-tee (device/driver may not support it)" );
+    }
+}
+
 bool Rtlsdr_device::is_streaming() const
 {
     return streaming_.load( std::memory_order_relaxed );

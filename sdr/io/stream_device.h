@@ -29,4 +29,7 @@ public:
     virtual void set_sample_rate_hz( uint32_t /*rate_hz*/ ) {}
     virtual void set_gain_tenths_db( int /*gain_tenths_db*/ ) {}
     virtual void set_agc( bool /*enable*/ ) {}
+    // Bias-tee: feed DC up the coax to power an ACTIVE antenna's LNA (most GPS antennas need this). Off by
+    // default - it puts DC on the antenna port, so enable it deliberately. (Equivalent to `rtl_biast -b 1`.)
+    virtual void set_bias_tee( bool /*enable*/ ) {}
 };

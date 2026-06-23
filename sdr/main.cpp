@@ -42,6 +42,8 @@ int main( int argc, char** argv )
           cxxopts::value<int>()->default_value( "0" ) )
         ( "gain",        "RTL-SDR tuner gain in dB (negative = hardware AGC)",
           cxxopts::value<double>()->default_value( "-1" ) )
+        ( "bias-tee",    "RTL-SDR: enable the bias-tee to power an active antenna's LNA (like rtl_biast -b 1)",
+          cxxopts::value<bool>()->default_value( "false" ) )
         ( "gui",         "Launch the graphical interface (requires a GUI build)",
           cxxopts::value<bool>()->default_value( "false" ) )
         ( "decimate",    "FIR-decimate the source by this integer factor before processing (1 = none). "
@@ -83,6 +85,7 @@ int main( int argc, char** argv )
     config.sample_rate_hz = result["sample-rate"].as<uint32_t>();
     config.device_index   = result["device"].as<int>();
     config.gain_db        = result["gain"].as<double>();
+    config.bias_tee       = result["bias-tee"].as<bool>();
     config.decimation     = std::max( 1u, result["decimate"].as<uint32_t>() );
     config.hatch_enabled  = result["hatch"].as<bool>();
     if( result.count( "record" ) )

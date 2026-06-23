@@ -69,6 +69,7 @@ private:
     QSpinBox*       device_index_ = nullptr;
     QDoubleSpinBox* gain_         = nullptr;
     QCheckBox*      agc_          = nullptr; // hardware AGC -> gain_db < 0
+    QCheckBox*      bias_tee_     = nullptr; // power an active antenna's LNA (RTL-SDR bias-tee)
     QLabel*         status_       = nullptr;
     bool            valid_        = true;
 };

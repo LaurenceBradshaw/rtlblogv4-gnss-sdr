@@ -123,6 +123,7 @@ void Receiver::set_source_params( Source_params params )
     config_.sample_rate_hz = params.sample_rate_hz;
     config_.device_index   = params.device_index;
     config_.gain_db        = params.gain_db;
+    config_.bias_tee       = params.bias_tee;
     config_.decimation     = std::max( 1u, params.decimation );
     config_.hatch_enabled  = params.hatch_enabled;
     config_.record_path    = std::move( params.record_path );
@@ -194,19 +195,21 @@ void Receiver::setup()
         {
             rtl->set_agc( true );
         }
+        rtl->set_bias_tee( config_.bias_tee ); // power an active antenna's LNA when requested
         // Read back what the hardware ACTUALLY settled on, so the GUI/CLI config can be verified against
         // the device (catches a rate the RTL-SDR rounded, an unapplied gain, an accidental AGC, etc.).
         logging::log(
             logging::Level::Info,
             fmt::format(
                 "RTL-SDR dev {}: requested rate {} Hz -> device {} Hz | centre {} Hz | tuner gain {:.1f} dB{} | "
-                "processing rate {} Hz (decim {})",
+                "bias-tee {} | processing rate {} Hz (decim {})",
                 config_.device_index,
                 native_rate,
                 rtl->sample_rate_hz(),
                 rtl->centre_freq_hz(),
                 rtl->tuner_gain_tenths_db() / 10.0,
                 ( config_.gain_db < 0.0 ) ? " [AGC]" : "",
+                config_.bias_tee ? "ON" : "off",
                 sample_rate_hz,
                 decim
             )
